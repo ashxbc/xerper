@@ -1,2 +1,0 @@
-# twikit is deliberately not used - see scripts/x_search.py for why
-httpx>=0.28
