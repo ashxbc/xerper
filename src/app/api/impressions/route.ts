@@ -1,13 +1,13 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { NextResponse } from "next/server";
+import { pythonInterpreter } from "@/lib/python";
 
 export const runtime = "nodejs";
 // Every request hits X live, so nothing here should be cached
 export const dynamic = "force-dynamic";
 
 const SCRIPT = path.join(process.cwd(), "scripts", "fetch_impressions.py");
-const PYTHON = process.env.PYTHON_BIN ?? "python";
 const TIMEOUT_MS = 120_000;
 
 type Payload = {
@@ -18,9 +18,11 @@ type Payload = {
   [key: string]: unknown;
 };
 
-function runFetcher(username: string, project: string): Promise<Payload> {
+async function runFetcher(username: string, project: string): Promise<Payload> {
+  const python = await pythonInterpreter();
+
   return new Promise((resolve, reject) => {
-    const child = spawn(PYTHON, [SCRIPT], {
+    const child = spawn(python.cmd, [...python.args, SCRIPT], {
       env: process.env,
       windowsHide: true,
     });
@@ -36,9 +38,16 @@ function runFetcher(username: string, project: string): Promise<Payload> {
     child.stdout.on("data", (chunk) => (stdout += chunk));
     child.stderr.on("data", (chunk) => (stderr += chunk));
 
-    child.on("error", (err) => {
+    child.on("error", (err: NodeJS.ErrnoException) => {
       clearTimeout(timer);
-      reject(err);
+      reject(
+        err.code === "ENOENT"
+          ? new Error(
+              `Could not launch Python ("${python.cmd}"). Set PYTHON_BIN in ` +
+                ".env.local to the full path of python.exe and restart the dev server.",
+            )
+          : err,
+      );
     });
 
     child.on("close", () => {
@@ -52,6 +61,9 @@ function runFetcher(username: string, project: string): Promise<Payload> {
       }
     });
 
+    // A failed spawn closes stdin, so writing would raise EPIPE over the
+    // real error - let the 'error' handler above report it instead
+    child.stdin.on("error", () => {});
     child.stdin.write(JSON.stringify({ username, project }));
     child.stdin.end();
   });
