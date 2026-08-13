@@ -1,6 +1,7 @@
 import * as cache from "./cache";
+import { reportRateLimited, reserveAccount } from "./accounts";
 import { discover } from "./endpoints";
-import { AuthFailed, EndpointMoved, XSearch, type Post, type UserFields } from "./search";
+import { EndpointMoved, XSearch, type Post, type UserFields } from "./search";
 
 /** Serverless caps how long a request may run, so the page budget is tighter
  *  than the old CLI's 25. Override with X_MAX_PAGES if your host allows more. */
@@ -75,14 +76,6 @@ export async function fetchImpressions(
   username: string,
   project: string,
 ): Promise<Payload> {
-  const authToken = (process.env.X_AUTH_TOKEN ?? "").trim();
-  const ct0 = (process.env.X_CT0 ?? "").trim();
-  if (!authToken || !ct0) {
-    throw new AuthFailed(
-      "No X session configured - set X_AUTH_TOKEN and X_CT0 environment variables",
-    );
-  }
-
   const query = buildQuery(username, project);
   const handle = username.replace(/^@/, "");
 
@@ -91,7 +84,10 @@ export async function fetchImpressions(
   const cached = cache.get<Payload>("impressions", key);
   if (cached) return { ...cached, cached: true };
 
-  const client = new XSearch(authToken, ct0);
+  // Round-robin across the burner pool; throws RateLimited immediately if
+  // all three accounts are already busy this second.
+  const account = reserveAccount();
+  const client = new XSearch(account.authToken, account.ct0);
 
   let result;
   try {
@@ -99,7 +95,7 @@ export async function fetchImpressions(
   } catch (error) {
     if (!(error instanceof EndpointMoved)) throw error;
     // X rotated the SearchTimeline query ID - rediscover it and retry once
-    const ids = await discover(authToken, ct0);
+    const ids = await discover(account.authToken, account.ct0);
     if (!ids.SearchTimeline) {
       throw new Error(
         "X moved the search endpoint and the new ID could not be found",
@@ -109,6 +105,10 @@ export async function fetchImpressions(
   }
 
   const { posts, rateLimited } = result;
+
+  // X 429'd this specific burner - cool it down instead of retrying it
+  // every second while the other accounts keep serving traffic.
+  if (rateLimited) reportRateLimited(account.id);
 
   // Resolve the project's own account for its icon (cached separately, so it
   // survives the shorter lifetime of the results above)

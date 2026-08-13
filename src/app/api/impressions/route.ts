@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { fetchImpressions } from "@/lib/x/impressions";
-import { AuthFailed } from "@/lib/x/search";
+import { AuthFailed, RateLimited } from "@/lib/x/search";
 
 export const runtime = "nodejs";
 // Every request hits X live, so nothing here should be cached
@@ -35,9 +35,11 @@ export async function POST(request: Request) {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     console.error("[impressions]", message);
-    return NextResponse.json(
-      { ok: false, error: message },
-      { status: error instanceof AuthFailed ? 401 : 502 },
-    );
+    const status = error instanceof AuthFailed
+      ? 401
+      : error instanceof RateLimited
+        ? 429
+        : 502;
+    return NextResponse.json({ ok: false, error: "Try again later." }, { status });
   }
 }

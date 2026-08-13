@@ -167,7 +167,7 @@ export default function ProofCard({
             {impressions.toLocaleString()}
           </p>
           <p className="mt-1.5 text-xs text-black/50">
-            impressions across {postCount} {postCount === 1 ? "post" : "posts"}
+            Impressions generated for {project}
           </p>
         </div>
       </div>

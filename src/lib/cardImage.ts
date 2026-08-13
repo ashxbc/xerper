@@ -141,11 +141,7 @@ export async function renderCardPng(data: CardData): Promise<Blob | null> {
 
   ctx.fillStyle = "rgba(0,0,0,0.5)";
   ctx.font = `400 12px ${data.fontFamily}`;
-  ctx.fillText(
-    `impressions across ${data.postCount} ${data.postCount === 1 ? "post" : "posts"}`,
-    left,
-    y + 60,
-  );
+  ctx.fillText(`Impressions generated for ${data.project}`, left, y + 60);
 
   // plot, flush to the card edges
   if (hasPlot) {

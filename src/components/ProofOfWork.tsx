@@ -36,7 +36,7 @@ export default function ProofOfWork() {
       const data = await res.json();
 
       if (!res.ok || !data.ok) {
-        setError(data.error ?? "Could not reach X");
+        setError("Try again later.");
         return;
       }
 
@@ -49,7 +49,7 @@ export default function ProofOfWork() {
         series: data.series ?? [],
       });
     } catch {
-      setError("Could not reach X");
+      setError("Try again later.");
     }
   }
 
