@@ -227,18 +227,28 @@ export class XSearch {
 
   /** Find the X account behind a project name, for its icon.
    *
-   *  Taking the matching handle at face value gets this wrong often: for
-   *  "caldera", @caldera is a 156-follower account while the actual project is
-   *  @Calderaxyz with 328k. So gather candidates from both an exact handle
-   *  lookup and a people search, then score them - a project's real account is
-   *  the one with the audience.
+   *  Prefer the account the user is actually already crediting: scan the
+   *  posts just fetched for an @mention starting with the project name -
+   *  "hana" matches @hana or @hana_something - and resolve that handle's
+   *  real profile. Falls back to the old name-search heuristic (exact
+   *  handle lookup + people search, scored by follower count) only when no
+   *  post mentions the project by handle at all.
    */
-  async resolveProject(project: string): Promise<UserFields | null> {
+  async resolveProject(
+    project: string,
+    posts: Post[] = [],
+  ): Promise<UserFields | null> {
     const key = project.replace(/^@/, "").trim().toLowerCase();
     if (!key) return null;
 
     const hit = cache.get<UserFields | Record<string, never>>("project", key);
     if (hit) return "screen_name" in hit ? (hit as UserFields) : null;
+
+    const fromMention = await this.resolveFromMentions(key, posts);
+    if (fromMention) {
+      cache.set("project", key, fromMention, cache.TTL_PROJECT);
+      return fromMention;
+    }
 
     const candidates: UserFields[] = [];
     const slug = key.replace(/[^a-z0-9_]/g, "");
@@ -251,6 +261,43 @@ export class XSearch {
     const best = XSearch.bestMatch(key, candidates);
     cache.set("project", key, best ?? {}, cache.TTL_PROJECT);
     return best;
+  }
+
+  /** Look for @handle mentions in the posts where the handle starts with
+   *  the project name - "hana" matches @hana and @hana_something alike.
+   *  An exact @hana wins outright; otherwise whichever @hana* variant is
+   *  mentioned most often is used. Returns null (triggering the fallback
+   *  search) if no post mentions anything starting with the project name. */
+  private async resolveFromMentions(
+    key: string,
+    posts: Post[],
+  ): Promise<UserFields | null> {
+    const normalise = (s: string) => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    const target = normalise(key);
+    if (!target) return null;
+
+    const counts = new Map<string, number>();
+    for (const post of posts) {
+      for (const match of post.text.matchAll(/@(\w{1,15})/g)) {
+        const handle = match[1];
+        if (!normalise(handle).startsWith(target)) continue;
+        counts.set(handle, (counts.get(handle) ?? 0) + 1);
+      }
+    }
+    if (counts.size === 0) return null;
+
+    const ranked = [...counts.entries()].sort((a, b) => {
+      const aExact = normalise(a[0]) === target;
+      const bExact = normalise(b[0]) === target;
+      if (aExact !== bExact) return aExact ? -1 : 1;
+      return b[1] - a[1];
+    });
+
+    for (const [handle] of ranked) {
+      const profile = await this.userByScreenName(handle);
+      if (profile) return profile;
+    }
+    return null;
   }
 
   private static bestMatch(

@@ -46,3 +46,9 @@ export function set(
     expires: Date.now() + ttl,
   });
 }
+
+/** Wipe every cached entry. Only affects this warm instance's memory - other
+ *  instances (if any) keep their own copies until they expire naturally. */
+export function clear(): void {
+  store.clear();
+}

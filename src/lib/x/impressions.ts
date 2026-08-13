@@ -111,8 +111,10 @@ export async function fetchImpressions(
   if (rateLimited) reportRateLimited(account.id);
 
   // Resolve the project's own account for its icon (cached separately, so it
-  // survives the shorter lifetime of the results above)
-  const projectProfile = await client.resolveProject(project);
+  // survives the shorter lifetime of the results above). Fetched posts are
+  // scanned first for a matching @mention before falling back to a name
+  // search, so the logo lands on the account the user is actually crediting.
+  const projectProfile = await client.resolveProject(project, posts);
 
   for (const post of posts) {
     post.url = `https://x.com/${post.screen_name || handle}/status/${post.id}`;
