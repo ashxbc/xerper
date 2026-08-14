@@ -80,18 +80,42 @@ export default function ProofOfWork() {
               @{username.replace(/^@/, "")}
             </p>
           )}
-          <input
-            key={step}
-            autoFocus
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-            placeholder={
-              step === "username"
-                ? "Enter your X username"
-                : "Enter project name or X handle"
-            }
-            className="w-full rounded-full bg-white px-5 py-3.5 text-center font-medium text-[#111] placeholder-black/60 outline-none"
-          />
+          <div className="relative w-full">
+            <input
+              key={step}
+              autoFocus
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              enterKeyHint="go"
+              placeholder={
+                step === "username"
+                  ? "Enter your X username"
+                  : "Enter project name or X handle"
+              }
+              className="w-full rounded-full bg-white py-3.5 pl-5 pr-14 text-center font-medium text-[#111] placeholder-black/60 outline-none"
+            />
+            {value.trim() && (
+              <button
+                type="submit"
+                aria-label="Continue"
+                className="absolute right-1.5 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-[#1E2AEB] text-white outline-none transition-transform active:scale-95"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="h-4 w-4"
+                  aria-hidden="true"
+                >
+                  <path d="M5 12h14" />
+                  <path d="m13 5 7 7-7 7" />
+                </svg>
+              </button>
+            )}
+          </div>
         </form>
       )}
 
