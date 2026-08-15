@@ -35,10 +35,20 @@ jobs:
             exit 1
           fi
 
-          # -m 290 keeps the connection open for the whole scan (the endpoint's
-          # maxDuration is 300s, and the scan itself is budgeted to ~240s).
-          # Without -f we capture the response body even on HTTP errors.
-          response=$(curl -sS -m 290 -w $'\n%{http_code}' "$URL/api/gems/run?cron=$CRON_SECRET") || {
+          # Normalize the base URL: strip any trailing slash (a trailing slash
+          # would join into //api/gems/run, which Vercel 308-redirects before
+          # the endpoint runs) and force https.
+          BASE="${URL%/}"
+          case "$BASE" in
+            http://*) BASE="https://${BASE#http://}" ;;
+          esac
+
+          # -L follows any remaining redirect (e.g. a bare domain bouncing to
+          # www) so a 308 never hides the real result; -m 290 keeps the
+          # connection open for the whole scan (the endpoint's maxDuration is
+          # 300s and the scan is budgeted to ~240s). Without -f we capture the
+          # response body even on HTTP errors.
+          response=$(curl -sSL -m 290 -w $'\n%{http_code}' "$BASE/api/gems/run?cron=$CRON_SECRET") || {
             code=$?
             echo "::error::Gems scan trigger failed (curl exit code $code) - check GEMS_RUN_URL and that the app is deployed"
             exit 1

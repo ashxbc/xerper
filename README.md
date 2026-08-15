@@ -57,7 +57,10 @@ as duplicates), and writes a row to `gems_scan_logs`. Pick one scheduler:
 - **GitHub Actions (free, every 3 hours)** - `.github/workflows/gems-scan.yml`
   already declares the `0 */3 * * *` schedule. Add two secrets in the repo
   (Settings > Secrets and variables > Actions):
-  - `GEMS_RUN_URL` - your deployed app URL, e.g. `https://your-app.vercel.app`
+  - `GEMS_RUN_URL` - your deployed app URL with **no trailing slash**, e.g.
+    `https://your-app.vercel.app` (a trailing slash makes Vercel redirect the
+    request before the endpoint runs; the workflow also strips it and follows
+    redirects, so `http://` or a trailing slash are handled automatically)
   - `CRON_SECRET` - same value as the `CRON_SECRET` env var on Vercel
   The job waits for the scan to finish (up to ~5 min) and reports the real
   HTTP status; a non-2xx response - or a missing secret - fails the job
