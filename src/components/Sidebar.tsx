@@ -27,12 +27,11 @@ const items = [
   {
     id: "feed",
     label: "Alpha Feed",
-    // Coin with a dollar sign — the money-making feed
+    // Simple coin — outer edge with an inner rim
     icon: (
       <>
         <circle cx="12" cy="12" r="10" />
-        <path d="M12 6.5v11" />
-        <path d="M15.5 6.5H10a3 3 0 0 0 0 6h4a3 3 0 0 1 0 6H8" />
+        <circle cx="12" cy="12" r="6.5" />
       </>
     ),
   },
