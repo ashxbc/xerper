@@ -6,10 +6,10 @@ export const runtime = "nodejs";
 // cached at the route level - lib/x/discovery.ts caches the assembled
 // result itself.
 export const dynamic = "force-dynamic";
-// Up to 50 candidates can each cost two X requests plus Groq, on top of the
-// paginated searches. The dedicated account is intentionally paced at five
-// seconds between requests to protect account health.
-export const maxDuration = 900;
+// Vercel Hobby caps function duration at 300s; the scan budget
+// (DISCOVERY_PAGES / DISCOVERY_MAX_CANDIDATES) defaults to fit inside that
+// window. Raise both if you upgrade or self-host.
+export const maxDuration = 300;
 
 /** Backend-only discovery scan - not linked from the UI. If DISCOVERY_SECRET
  *  is set, callers must pass it via `?secret=` or the X-Discovery-Secret

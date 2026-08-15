@@ -72,6 +72,21 @@ as duplicates), and writes a row to `gems_scan_logs`. Pick one scheduler:
   0 */3 * * * curl -fsS "https://YOUR-HOST/api/gems/run?cron=YOUR_CRON_SECRET" -o /dev/null
   ```
 
+### Free-plan (Vercel Hobby) scan budget
+
+Hobby caps function duration at **300s** and the routes declare
+`maxDuration = 300` accordingly. The scan budget is configurable via env vars
+and defaults to values that fit inside that window:
+
+- `DISCOVERY_PAGES` (default 2) - pages fetched per query
+- `DISCOVERY_PAGE_SIZE` (default 50) - posts per page
+- `DISCOVERY_MAX_CANDIDATES` (default 25) - unique handles evaluated per run
+- `DISCOVERY_MAX_FOLLOWERS` (default 1000) - follower ceiling
+
+If scans time out at 300s, lower `DISCOVERY_MAX_CANDIDATES` (the dominant
+cost); if you upgrade to Pro or self-host, raise the limits and bump the
+routes' `maxDuration` back up.
+
 After each successful run the website updates automatically: `/api/gems`
 reads the `added` projects straight from Supabase (lowest follower count
 first), and the Alpha Terminal renders whatever is stored.

@@ -7,7 +7,10 @@ export const runtime = "nodejs";
 // (The fallback path below serves the in-memory scan result, which
 // discovery.ts already caches itself.)
 export const dynamic = "force-dynamic";
-export const maxDuration = 900;
+// Vercel Hobby caps function duration at 300s; the scan budget
+// (DISCOVERY_PAGES / DISCOVERY_MAX_CANDIDATES) defaults to fit inside that
+// window. Raise both if you upgrade or self-host.
+export const maxDuration = 300;
 
 /** Read-only feed for the Alpha Terminal (diamond) tab. Backed by the
  *  nft_projects table in Supabase, which the scheduled scan (api/gems/run)

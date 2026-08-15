@@ -25,18 +25,21 @@ import discoveryQueries from "./discoveryQueries.json";
 
 const QUERIES: string[] = discoveryQueries;
 
-// Fixed discovery boundaries. A full search round can inspect up to
-// 9 queries × 3 pages × 50 posts = 1,350 search results before deduplication.
-const MAX_FOLLOWERS = 1000;
-const PAGES_PER_QUERY = 3;
-const PAGE_SIZE = 50;
+// Scan budget, read from env so it can be tuned per host without code
+// changes. Vercel's Hobby plan caps function duration at 300s, and each
+// discovery request is deliberately paced at 5s for account health, so the
+// defaults below keep a full scan inside that window. Raise the limits (and
+// the routes' maxDuration) if you upgrade or self-host.
+const MAX_FOLLOWERS = Number(process.env.DISCOVERY_MAX_FOLLOWERS ?? 1000);
+const PAGES_PER_QUERY = Number(process.env.DISCOVERY_PAGES ?? 2);
+const PAGE_SIZE = Number(process.env.DISCOVERY_PAGE_SIZE ?? 50);
 // SearchTimeline pagination happens inside one XSearch call and therefore
 // cannot use acquireDiscoveryAccount() between pages; pace those requests
 // explicitly at the same conservative interval as individual lookups.
 const PAGE_INTERVAL_MS = 5000;
 // Every unvouched candidate costs a profile lookup, maybe a tweet fetch, and
-// a Groq call. Evaluate at most 50 unique handles per completed round.
-const MAX_CANDIDATES = 50;
+// a Groq call. Evaluate at most 25 unique handles per completed round.
+const MAX_CANDIDATES = Number(process.env.DISCOVERY_MAX_CANDIDATES ?? 25);
 const DISCOVERY_CACHE_KEY = "premint-v1";
 const VERDICT_CACHE_NAMESPACE = "discovery-verdict-premint-v1";
 
@@ -319,6 +322,23 @@ async function evaluateCandidate(
   const cacheKey = handle.toLowerCase();
   const cachedVerdict = cache.get<DiscoveryVerdict>(VERDICT_CACHE_NAMESPACE, cacheKey);
   if (cachedVerdict) return cachedVerdict;
+
+  // Case 1 candidates (the poster themselves) already carry their follower
+  // count in the search result - skip the profile lookup when they're over
+  // the bar, since lookups are the expensive part of the scan (and the
+  // dominant cause of Hobby function timeouts). Mentioned handles (case 2)
+  // still need the lookup. The live gate below remains the final word.
+  if (
+    seedPost.screen_name.toLowerCase() === handle.toLowerCase() &&
+    seedPost.author_followers !== undefined &&
+    seedPost.author_followers >= MAX_FOLLOWERS
+  ) {
+    stats.overFollowerLimit++;
+    console.log(
+      `[discovery] SKIP  @${handle} - ${seedPost.author_followers} followers (limit ${MAX_FOLLOWERS}, from search result)`,
+    );
+    return null;
+  }
 
   const account = await acquireDiscoveryAccount();
   const client = new XSearch(account.authToken, account.ct0);
