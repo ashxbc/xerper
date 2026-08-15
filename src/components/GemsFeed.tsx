@@ -56,7 +56,28 @@ export default function GemsFeed() {
   }, []);
 
   if (state.status === "loading") {
-    return <p className="text-sm font-medium text-white/80">Scanning for gems...</p>;
+    // The same crescent-moon-eye spinner the proof-of-work card uses, white
+    // on the blue page background.
+    return (
+      <svg
+        viewBox="0 0 48 48"
+        className="h-12 w-12 animate-spin"
+        style={{ animationDuration: "1.6s" }}
+        fill="white"
+        aria-label="Loading"
+        role="img"
+      >
+        {/* two crescent-moon eyes, mirrored across the centre */}
+        <path
+          d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"
+          transform="translate(41.6 6.4) scale(-0.8 0.8)"
+        />
+        <path
+          d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"
+          transform="translate(25.6 22.4) scale(-0.8 0.8)"
+        />
+      </svg>
+    );
   }
 
   if (state.status === "error") {
