@@ -100,14 +100,18 @@ export default function GemsFeed() {
     </div>
   );
 
-  // Top padding keeps the card wall clipped below the page headers (the
-  // logo and "powered by valor" sit absolutely on top) - cards never scroll
-  // into that zone. Bottom clearance is handled by the main layout.
+  // The marquee viewport sits below a fixed header strip, so cards are
+  // clipped at its top edge and can never scroll into the logo / "powered by
+  // valor" zone - the same way the bottom clears the menu bar (which the
+  // main layout handles with its own padding).
   return (
-    <div className="flex h-full w-full max-w-md flex-col overflow-hidden pb-4 pt-16 sm:pb-6 sm:pt-20">
-      <div className="flex flex-col motion-reduce:[animation:none] hover:[animation-play-state:paused] [animation:marquee-up_45s_linear_infinite]">
-        {copy(false)}
-        {copy(true)}
+    <div className="flex h-full w-full max-w-md flex-col">
+      <div className="h-16 shrink-0 sm:h-20" aria-hidden="true" />
+      <div className="relative min-h-0 flex-1 overflow-hidden">
+        <div className="flex flex-col motion-reduce:[animation:none] hover:[animation-play-state:paused] [animation:marquee-up_45s_linear_infinite]">
+          {copy(false)}
+          {copy(true)}
+        </div>
       </div>
     </div>
   );
