@@ -27,12 +27,12 @@ const items = [
   {
     id: "feed",
     label: "Alpha Feed",
-    // Signal waves — live stream of posts
+    // Coin with a dollar sign — the money-making feed
     icon: (
       <>
-        <circle cx="6" cy="18" r="1.2" />
-        <path d="M5 12.5a6.5 6.5 0 0 1 6.5 6.5" />
-        <path d="M5 7a12 12 0 0 1 12 12" />
+        <circle cx="12" cy="12" r="10" />
+        <path d="M12 6.5v11" />
+        <path d="M15.5 6.5H10a3 3 0 0 0 0 6h4a3 3 0 0 1 0 6H8" />
       </>
     ),
   },
