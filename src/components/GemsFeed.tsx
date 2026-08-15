@@ -100,8 +100,11 @@ export default function GemsFeed() {
     </div>
   );
 
+  // Top padding keeps the card wall clipped below the page headers (the
+  // logo and "powered by valor" sit absolutely on top) - cards never scroll
+  // into that zone. Bottom clearance is handled by the main layout.
   return (
-    <div className="flex h-full w-full max-w-md flex-col overflow-hidden py-4 sm:py-6">
+    <div className="flex h-full w-full max-w-md flex-col overflow-hidden pb-4 pt-16 sm:pb-6 sm:pt-20">
       <div className="flex flex-col motion-reduce:[animation:none] hover:[animation-play-state:paused] [animation:marquee-up_45s_linear_infinite]">
         {copy(false)}
         {copy(true)}
