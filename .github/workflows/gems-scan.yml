@@ -2,8 +2,13 @@ name: Gems scan (every 3 hours)
 
 # Vercel's Hobby plan only allows one cron invocation per day, so the every-3h
 # schedule lives here instead: GitHub Actions is free and fires the deployed
-# /api/gems/run endpoint on time. The scan itself runs server-side; this job
-# just sends the request and exits.
+# /api/gems/run endpoint on time.
+#
+# This job deliberately waits for the real HTTP response (up to ~5 minutes):
+# /api/gems/run returns only after the scan finishes, so waiting keeps the
+# connection open until Vercel completes the function and writes the scan log.
+# Any non-2xx status fails the job loudly so a broken trigger shows up red in
+# the Actions tab instead of silently doing nothing.
 
 on:
   schedule:
@@ -19,8 +24,35 @@ jobs:
           URL: ${{ secrets.GEMS_RUN_URL }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
-          # Fire-and-forget: the Vercel function keeps running the scan after
-          # the HTTP request returns, so we bail out after a short wait. Real
-          # success/failure lives in Supabase's gems_scan_logs table, not here.
-          curl -fsS -m 30 "$URL/api/gems/run?cron=$CRON_SECRET" \
-            || echo "request sent (scan continues server-side - see gems_scan_logs)"
+          set -uo pipefail
+
+          if [ -z "$URL" ]; then
+            echo "::error::GEMS_RUN_URL secret is not set - add it under Settings > Secrets and variables > Actions"
+            exit 1
+          fi
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::CRON_SECRET secret is not set - add it under Settings > Secrets and variables > Actions"
+            exit 1
+          fi
+
+          # -m 290 keeps the connection open for the whole scan (the endpoint's
+          # maxDuration is 300s, and the scan itself is budgeted to ~240s).
+          # Without -f we capture the response body even on HTTP errors.
+          response=$(curl -sS -m 290 -w $'\n%{http_code}' "$URL/api/gems/run?cron=$CRON_SECRET") || {
+            code=$?
+            echo "::error::Gems scan trigger failed (curl exit code $code) - check GEMS_RUN_URL and that the app is deployed"
+            exit 1
+          }
+          body=$(printf '%s' "$response" | sed '$d')
+          code=$(printf '%s' "$response" | tail -n 1)
+
+          echo "HTTP $code"
+          printf '%s\n' "$body"
+
+          case "$code" in
+            2*) echo "Gems scan completed OK - see gems_scan_logs in Supabase" ;;
+            *)
+              echo "::error::Gems scan returned HTTP $code - check the Vercel env vars (Supabase URL / service role key / CRON_SECRET) and the function logs"
+              exit 1
+              ;;
+          esac

@@ -55,6 +55,7 @@ export default function ProofOfWork() {
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    setError("");
     const entry = value.trim();
     if (!entry) return;
 
@@ -65,6 +66,14 @@ export default function ProofOfWork() {
       // Brief pause before asking for the project
       setTimeout(() => setStep("project"), 900);
     } else if (step === "project") {
+      // The card measures a user's own posts crediting a project - a project
+      // cannot be the user themself (from:me (me OR #me) would just count
+      // self-mentions). Compare on the raw handle so @User == user == USER.
+      const norm = (s: string) => s.replace(/^@/, "").trim().toLowerCase();
+      if (norm(username) === norm(entry)) {
+        setError("Project name can't be your own username.");
+        return;
+      }
       setValue("");
       setStep("card");
       void fetchImpressions(username, entry);
@@ -116,6 +125,11 @@ export default function ProofOfWork() {
               </button>
             )}
           </div>
+          {error && step === "project" && (
+            <p className="mt-3 text-center text-sm font-medium text-red-300">
+              {error}
+            </p>
+          )}
         </form>
       )}
 

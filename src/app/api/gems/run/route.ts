@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
-import { insertScanLog, isSupabaseConfigured } from "@/lib/gems-store";
+import {
+  insertScanLog,
+  isSupabaseConfigured,
+  updateScanLog,
+} from "@/lib/gems-store";
 import { runDiscovery } from "@/lib/x/discovery";
 
 export const runtime = "nodejs";
@@ -46,8 +50,21 @@ export async function GET(request: Request) {
     );
   }
 
+  // Two-phase logging: open a 'running' row the moment the endpoint is hit so
+  // every scheduled call leaves a trace in gems_scan_logs - even one killed
+  // mid-scan - and persistScanRun finalizes it when the scan finishes.
+  let logId: number | null = null;
   try {
-    const result = await runDiscovery({ force: true });
+    logId = await insertScanLog({ status: "running" });
+  } catch (error) {
+    console.error(
+      "[gems/run] failed to open scan log:",
+      error instanceof Error ? error.message : error,
+    );
+  }
+
+  try {
+    const result = await runDiscovery({ force: true, logId: logId ?? undefined });
 
     // The scan ran but storing it may have failed - surface that so a
     // partially-persisted run is visible rather than silent.
@@ -69,8 +86,29 @@ export async function GET(request: Request) {
     const message = error instanceof Error ? error.message : "Unknown error";
     console.error("[gems/run]", message);
 
-    // Every scheduled call is tracked, including failures.
-    await insertScanLog({ status: "failed", error: message }).catch(() => {});
+    // Finalize the open row (or record a standalone failure if opening it
+    // failed) - every scheduled call is tracked, including failures.
+    try {
+      if (logId) {
+        await updateScanLog(logId, {
+          finished_at: new Date().toISOString(),
+          status: "failed",
+          projects_found: 0,
+          projects_new: 0,
+          projects_skipped_duplicates: 0,
+          projects_rejected: 0,
+          candidates_considered: 0,
+          queries_run: 0,
+          posts_scanned: 0,
+          rate_limited: false,
+          error: message.slice(0, 2000),
+        });
+      } else {
+        await insertScanLog({ status: "failed", error: message });
+      }
+    } catch {
+      // Logging the failure failed - the original error is the real story.
+    }
     return NextResponse.json({ ok: false, error: "Try again later." }, { status: 502 });
   }
 }

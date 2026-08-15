@@ -59,8 +59,27 @@ as duplicates), and writes a row to `gems_scan_logs`. Pick one scheduler:
   (Settings > Secrets and variables > Actions):
   - `GEMS_RUN_URL` - your deployed app URL, e.g. `https://your-app.vercel.app`
   - `CRON_SECRET` - same value as the `CRON_SECRET` env var on Vercel
-  The job fires the request and exits; the scan completes server-side and
-  every run is recorded in `gems_scan_logs`.
+  The job waits for the scan to finish (up to ~5 min) and reports the real
+  HTTP status; a non-2xx response - or a missing secret - fails the job
+  loudly so a broken trigger shows up red in the Actions tab instead of
+  silently doing nothing. You can also hit "Run workflow" there to trigger
+  a scan manually at any time.
+
+### Verifying the scheduler
+
+Every call to `/api/gems/run` now opens a `running` row in `gems_scan_logs`
+the moment it arrives, then finalizes it to `success` / `partial` / `failed`
+when the scan finishes. So Supabase tells you the truth about the schedule:
+
+- Rows appearing every 3 hours = the scheduler is healthy.
+- A `running` row stuck on `running` = the call arrived but the function died
+  mid-scan (check the budget section below).
+- No rows at all = the workflow never fired or the secrets are missing -
+  check the Actions tab for scheduled runs and the secret values.
+
+One-time migration: if you created the tables before this change, re-run
+`supabase/schema.sql` - it widens the scan-logs `status` column to admit
+`running` rows (idempotent, safe to re-run).
 - **Vercel Cron (Hobby = once per day)** - free Vercel accounts only allow one
   cron invocation per day (`0 */3 * * *` fails deployment on Hobby). If you
   accept a daily scan instead, add a `vercel.json` with:
@@ -82,6 +101,9 @@ and defaults to values that fit inside that window:
 - `DISCOVERY_PAGE_SIZE` (default 50) - posts per page
 - `DISCOVERY_MAX_CANDIDATES` (default 25) - unique handles evaluated per run
 - `DISCOVERY_MAX_FOLLOWERS` (default 1000) - follower ceiling
+- `DISCOVERY_TIME_BUDGET_MS` (default 240000) - hard wall-clock cap on the
+  scan so it always finishes inside the 300s function limit and actually gets
+  stored + logged. Lower it if scans still time out.
 
 If scans time out at 300s, lower `DISCOVERY_MAX_CANDIDATES` (the dominant
 cost); if you upgrade to Pro or self-host, raise the limits and bump the

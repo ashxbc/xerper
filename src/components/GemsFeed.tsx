@@ -113,6 +113,11 @@ export default function GemsFeed() {
           {copy(true)}
         </div>
       </div>
+      {/* Desktop mirrors the top spacer so the card wall stops the same
+          distance from the bottom as it starts from the top. Mobile keeps the
+          current look (no bottom gap - the main layout's padding already
+          clears the bottom menu bar). */}
+      <div className="h-0 shrink-0 sm:h-20" aria-hidden="true" />
     </div>
   );
 }

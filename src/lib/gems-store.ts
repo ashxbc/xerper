@@ -13,9 +13,11 @@ export { isSupabaseConfigured };
  *                     published to the site), FALSE verdicts as 'rejected'.
  *                     Any handle that already exists - whatever its status -
  *                     is a duplicate and is skipped on later runs.
- *   - gems_scan_logs - one row per completed scan run: when it ran, whether
- *                     it succeeded, how many projects were found/new/skipped,
- *                     and any error details.
+ *   - gems_scan_logs - one row per Gems Finding API call, logged in two
+ *                     phases: a 'running' row is inserted the moment the
+ *                     endpoint is invoked (so even a scan killed mid-run
+ *                     leaves a trace), then finalized to 'success'/'partial'/
+ *                     'failed' with the run's counts when it finishes.
  *
  * Every function here is a no-op (or throws when the caller forces an actual
  * DB write) when Supabase is not configured, so the app still runs before the
@@ -90,11 +92,28 @@ function verdictToRow(verdict: DiscoveryVerdict, now: string): ProjectRow {
   };
 }
 
-/** Persist a completed scan: insert new handles, skip existing ones, and log
- *  the run. Throws on real DB failures (the caller decides how to surface
- *  them); returns the new/skipped counts. */
+/** Final fields written to a scan-log row once a run finishes. */
+export type ScanLogFinal = {
+  finished_at: string;
+  status: "success" | "partial" | "failed";
+  projects_found: number;
+  projects_new: number;
+  projects_skipped_duplicates: number;
+  projects_rejected: number;
+  candidates_considered: number;
+  queries_run: number;
+  posts_scanned: number;
+  rate_limited: boolean;
+  error?: string;
+};
+
+/** Persist a completed scan: insert new handles, skip existing ones, and
+ *  finalize the run's scan-log row. Returns the new/skipped counts and any
+ *  storage error. Storage failures are recorded on the log row rather than
+ *  thrown, so a half-written run is still fully visible in the log table. */
 export async function persistScanRun(
   result: DiscoveryResult,
+  logId?: number,
 ): Promise<PersistenceStats> {
   const stats: PersistenceStats = {
     configured: false,
@@ -117,26 +136,32 @@ export async function persistScanRun(
     .from("nft_projects")
     .select("handle")
     .in("handle", lowerHandles);
-  if (fetchError) throw fetchError;
+  if (fetchError) {
+    stats.error = `failed to read existing projects: ${fetchError.message}`;
+  } else {
+    const known = new Set(
+      (existing ?? []).map((row) => String(row.handle).toLowerCase()),
+    );
+    const fresh = verdicts.filter((v) => !known.has(v.handle.toLowerCase()));
+    stats.projects_skipped_duplicates = verdicts.length - fresh.length;
 
-  const known = new Set(
-    (existing ?? []).map((row) => String(row.handle).toLowerCase()),
-  );
-  const fresh = verdicts.filter((v) => !known.has(v.handle.toLowerCase()));
-  stats.projects_skipped_duplicates = verdicts.length - fresh.length;
-
-  if (fresh.length > 0) {
-    const rows = fresh.map((v) => verdictToRow(v, now));
-    const { error: insertError } = await db.from("nft_projects").insert(rows);
-    if (insertError) throw insertError;
+    if (fresh.length > 0) {
+      const rows = fresh.map((v) => verdictToRow(v, now));
+      const { error: insertError } = await db.from("nft_projects").insert(rows);
+      if (insertError) {
+        stats.error = `failed to store projects: ${insertError.message}`;
+      } else {
+        stats.projects_new = fresh.filter((v) => v.is_nft_project).length;
+      }
+    }
   }
 
-  stats.projects_new = fresh.filter((v) => v.is_nft_project).length;
-
-  const { error: logError } = await db.from("gems_scan_logs").insert({
-    started_at: result.generated_at,
-    finished_at: new Date().toISOString(),
-    status: result.rate_limited ? "partial" : "success",
+  // Finalize the run's log row (or create one when the caller didn't open
+  // one). Kept separate from the project insert above, so even a storage
+  // failure still leaves a complete record of the run.
+  const final: ScanLogFinal = {
+    finished_at: now,
+    status: result.rate_limited || stats.error ? "partial" : "success",
     projects_found: result.projects.length,
     projects_new: stats.projects_new,
     projects_skipped_duplicates: stats.projects_skipped_duplicates,
@@ -145,9 +170,15 @@ export async function persistScanRun(
     queries_run: result.queries_run,
     posts_scanned: result.posts_scanned,
     rate_limited: result.rate_limited,
-  });
+    error: stats.error,
+  };
+
+  const finalize = logId
+    ? db.from("gems_scan_logs").update(final).eq("id", logId)
+    : db.from("gems_scan_logs").insert({ started_at: result.generated_at, ...final });
+  const { error: logError } = await finalize;
   if (logError) {
-    stats.error = `failed to insert scan log: ${logError.message}`;
+    stats.error = `failed to write scan log: ${logError.message}`;
   } else {
     stats.log_inserted = true;
   }
@@ -155,25 +186,43 @@ export async function persistScanRun(
   return stats;
 }
 
-/** Record a scan run that failed before producing a result. Used by the cron
- *  route so every Gems Finding API call - successful or not - is tracked. */
+/** Open a scan-log row ('running') when a Gems Finding API call arrives, or
+ *  record a standalone failure. Returns the row's id for 'running' rows so
+ *  the caller can finalize it later - every invocation, even one killed
+ *  mid-scan, leaves a trace in the log table. */
 export async function insertScanLog(entry: {
-  status: "failed";
-  error: string;
-}): Promise<void> {
+  status: "running" | "failed";
+  error?: string;
+}): Promise<number | null> {
+  if (!isSupabaseConfigured()) return null;
+  const { data, error } = await serverClient()
+    .from("gems_scan_logs")
+    .insert({
+      started_at: new Date().toISOString(),
+      status: entry.status,
+      projects_found: 0,
+      projects_new: 0,
+      projects_skipped_duplicates: 0,
+      projects_rejected: 0,
+      candidates_considered: 0,
+      queries_run: 0,
+      posts_scanned: 0,
+      rate_limited: false,
+      error: entry.error?.slice(0, 2000),
+    })
+    .select("id")
+    .single();
+  if (error) throw error;
+  return data?.id ?? null;
+}
+
+/** Finalize a 'running' scan-log row after the scan completes. */
+export async function updateScanLog(
+  id: number,
+  patch: ScanLogFinal,
+): Promise<void> {
   if (!isSupabaseConfigured()) return;
-  await serverClient().from("gems_scan_logs").insert({
-    started_at: new Date().toISOString(),
-    finished_at: new Date().toISOString(),
-    status: entry.status,
-    projects_found: 0,
-    projects_new: 0,
-    projects_skipped_duplicates: 0,
-    projects_rejected: 0,
-    candidates_considered: 0,
-    rate_limited: false,
-    error: entry.error.slice(0, 2000),
-  });
+  await serverClient().from("gems_scan_logs").update(patch).eq("id", id);
 }
 
 /** Projects currently published to the site, lowest follower count first -

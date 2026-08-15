@@ -40,6 +40,11 @@ const PAGE_INTERVAL_MS = 5000;
 // Every unvouched candidate costs a profile lookup, maybe a tweet fetch, and
 // a Groq call. Evaluate at most 25 unique handles per completed round.
 const MAX_CANDIDATES = Number(process.env.DISCOVERY_MAX_CANDIDATES ?? 25);
+// Hard wall-clock cap so the scan always finishes inside the host's function
+// timeout (Vercel Hobby = 300s) and can persist + log its results. When X
+// turns up unusually many eligible accounts, this stops the scan instead of
+// letting the function be killed mid-run with nothing stored.
+const SCAN_TIME_BUDGET_MS = Number(process.env.DISCOVERY_TIME_BUDGET_MS ?? 240_000);
 const DISCOVERY_CACHE_KEY = "premint-v1";
 const VERDICT_CACHE_NAMESPACE = "discovery-verdict-premint-v1";
 
@@ -126,9 +131,11 @@ let discoveryInFlight: Promise<DiscoveryResult> | null = null;
  *  Options:
  *   - force: bypass the cache and always rescan (used by the scheduled run).
  *   - persist: write this run's projects and a scan-log row to Supabase once
- *     the scan finishes (default true; a shared run persists exactly once). */
+ *     the scan finishes (default true; a shared run persists exactly once).
+ *   - logId: id of a 'running' gems_scan_logs row to finalize instead of
+ *     inserting a new one (the scheduled run opens it before scanning). */
 export async function runDiscovery(
-  options: { force?: boolean; persist?: boolean } = {},
+  options: { force?: boolean; persist?: boolean; logId?: number } = {},
 ): Promise<DiscoveryResult> {
   if (!options.force) {
     const cached = cache.get<DiscoveryResult>("discovery", DISCOVERY_CACHE_KEY);
@@ -140,7 +147,7 @@ export async function runDiscovery(
     const result = await scanDiscovery();
     if (options.persist !== false) {
       try {
-        result.persistence = await persistScanRun(result);
+        result.persistence = await persistScanRun(result, options.logId);
       } catch (error) {
         console.error(
           "[discovery] failed to persist scan to Supabase:",
@@ -158,6 +165,7 @@ export async function runDiscovery(
 }
 
 async function scanDiscovery(): Promise<DiscoveryResult> {
+  const startedAt = Date.now();
   const evaluated = new Map<string, DiscoveryVerdict>();
   const candidates = new Map<string, { handle: string; query: string; post: Post }>();
   let queriesRun = 0;
@@ -180,6 +188,10 @@ async function scanDiscovery(): Promise<DiscoveryResult> {
   // being scanned at all.
   for (const query of QUERIES) {
     if (rateLimited) break;
+    if (Date.now() - startedAt > SCAN_TIME_BUDGET_MS) {
+      console.log("[discovery] time budget reached - skipping remaining queries");
+      break;
+    }
 
     let result;
     try {
@@ -234,6 +246,15 @@ async function scanDiscovery(): Promise<DiscoveryResult> {
   for (const candidate of candidates.values()) {
     if (rateLimited) break;
     if (candidatesConsidered >= MAX_CANDIDATES) break;
+    // Leave headroom for this candidate's own paced lookups (up to two) plus
+    // the final persistence write, so the run always completes inside the
+    // host's function timeout and actually gets stored + logged.
+    if (Date.now() - startedAt > SCAN_TIME_BUDGET_MS - 20_000) {
+      console.log(
+        "[discovery] time budget reached - stopping candidate evaluation",
+      );
+      break;
+    }
     candidatesConsidered++;
 
     try {

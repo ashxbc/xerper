@@ -30,6 +30,18 @@ export async function POST(request: Request) {
     );
   }
 
+  // Same guard as the client: the card credits a user for their posts about a
+  // project, so the project can never be the user's own account. Compare on
+  // the raw handle (@User == user == USER) so the check can't be bypassed by
+  // casing or a leading @.
+  const norm = (s: string) => s.replace(/^@/, "").trim().toLowerCase();
+  if (norm(username) === norm(project)) {
+    return NextResponse.json(
+      { ok: false, error: "Project name can't be your own username" },
+      { status: 400 },
+    );
+  }
+
   try {
     return NextResponse.json(await fetchImpressions(username, project));
   } catch (error) {

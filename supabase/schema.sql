@@ -44,13 +44,15 @@ create index if not exists nft_projects_status_idx
 create index if not exists nft_projects_discovered_at_idx
   on public.nft_projects (discovered_at desc);
 
--- One row per Gems Finding API call (successful, partial, or failed) so there
--- is a complete history of every scheduled run.
+-- One row per Gems Finding API call so there is a complete history of every
+-- scheduled run. Each call is logged twice: a 'running' row is inserted the
+-- moment the endpoint is invoked (so even a function killed mid-scan leaves a
+-- trace), then updated to 'success'/'partial'/'failed' when the scan finishes.
 create table if not exists public.gems_scan_logs (
   id bigint generated always as identity primary key,
   started_at timestamptz not null default now(),
   finished_at timestamptz,
-  status text not null check (status in ('success', 'partial', 'failed')),
+  status text not null check (status in ('running', 'success', 'partial', 'failed')),
   projects_found integer not null default 0,
   projects_new integer not null default 0,
   projects_skipped_duplicates integer not null default 0,
@@ -64,3 +66,9 @@ create table if not exists public.gems_scan_logs (
 
 create index if not exists gems_scan_logs_started_at_idx
   on public.gems_scan_logs (started_at desc);
+
+-- For projects that already ran the original schema: widen the status check
+-- to admit 'running' rows. Idempotent - safe to re-run.
+alter table public.gems_scan_logs drop constraint if exists gems_scan_logs_status_check;
+alter table public.gems_scan_logs add constraint gems_scan_logs_status_check
+  check (status in ('running', 'success', 'partial', 'failed'));
