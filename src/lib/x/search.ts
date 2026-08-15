@@ -65,14 +65,28 @@ export type Post = {
   quotes: number;
   text: string;
   url?: string;
+  // Author snapshot at post time - undefined when the search result didn't
+  // carry a resolvable user object. Used to spot low-follower accounts.
+  author_name?: string;
+  author_avatar?: string;
+  author_followers?: number;
+  author_verified?: boolean;
 };
 
 export type UserFields = {
   name: string;
   screen_name: string;
   avatar: string;
+  // Empty string when the account has no banner set - X omits the field
+  // entirely rather than sending a placeholder URL.
+  banner: string;
   followers: number;
+  following: number;
   verified: boolean;
+  bio: string;
+  // Raw X-format timestamp (e.g. "Wed Oct 10 20:19:24 +0000 2018") - format
+  // it for display at the point of use rather than here.
+  joined: string;
 };
 
 type Json = Record<string, unknown>;
@@ -175,6 +189,7 @@ export class XSearch {
     query: string,
     maxPages: number,
     pageSize = 20,
+    pageIntervalMs = 0,
   ): Promise<{ posts: Post[]; rateLimited: boolean }> {
     const posts: Post[] = [];
     const seen = new Set<string>();
@@ -182,6 +197,10 @@ export class XSearch {
     let rateLimited = false;
 
     for (let page = 0; page < maxPages; page++) {
+      if (page > 0 && pageIntervalMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, pageIntervalMs));
+      }
+
       let payload: Json;
       try {
         payload = await this.post(query, cursor, pageSize);
@@ -341,7 +360,10 @@ export class XSearch {
     return best;
   }
 
-  private async userByScreenName(handle: string): Promise<UserFields | null> {
+  /** Public lookup by handle - used by the impressions flow internally, and
+   *  by the discovery scan to resolve a candidate handle's profile (and bio)
+   *  directly rather than through a fuzzy name search. */
+  async userByScreenName(handle: string): Promise<UserFields | null> {
     const id = queryId("UserByScreenName");
     const params = new URLSearchParams({
       variables: JSON.stringify({
@@ -356,11 +378,33 @@ export class XSearch {
         `https://x.com/i/api/graphql/${id}/UserByScreenName?${params}`,
         { headers: this.headers },
       );
-      if (!response.ok) return null;
+      // Let the caller know this account is really rate-limited, rather than
+      // reporting it as an ordinary failed lookup - callers use this to stop
+      // burning more requests on a cooling-down account.
+      if (response.status === 429) {
+        throw new RateLimited("rate limited by X");
+      }
+      if (!response.ok) {
+        console.error(
+          `[x] UserByScreenName(${handle}) returned ${response.status}`,
+        );
+        return null;
+      }
       const data = (await response.json()) as Json;
       const user = (data.data as Json)?.user as Json | undefined;
-      return XSearch.userFields(user?.result as Json | undefined);
-    } catch {
+      const fields = XSearch.userFields(user?.result as Json | undefined);
+      if (!fields) {
+        console.error(
+          `[x] UserByScreenName(${handle}) had no parseable user object`,
+        );
+      }
+      return fields;
+    } catch (error) {
+      if (error instanceof RateLimited) throw error;
+      console.error(
+        `[x] UserByScreenName(${handle}) failed:`,
+        error instanceof Error ? error.message : error,
+      );
       return null;
     }
   }
@@ -386,13 +430,36 @@ export class XSearch {
     if (!user || !user.core) return null;
     const core = user.core as Json;
     const avatar = String((user.avatar as Json)?.image_url ?? "");
+    // Bio lives under profile_bio in the current schema; legacy is a
+    // defensive fallback in case an account still serves the older shape.
+    const bio = String(
+      (user.profile_bio as Json)?.description ??
+        (user.legacy as Json)?.description ??
+        "",
+    );
+    // Banner has stayed under legacy across the schema moves that relocated
+    // avatar/bio; the other two keys are speculative fallbacks in case it
+    // moves the same way.
+    const banner = String(
+      (user.legacy as Json)?.profile_banner_url ??
+        (user.profile_banner as Json)?.image_url ??
+        (user.banner as Json)?.image_url ??
+        "",
+    );
     return {
       name: String(core.name ?? ""),
       screen_name: String(core.screen_name ?? ""),
       // _normal is a 48px thumbnail; _400x400 is the crisp version
       avatar: avatar.replace("_normal.", "_400x400."),
+      banner,
+      bio,
       followers: toInt((user.relationship_counts as Json)?.followers),
+      following: toInt(
+        (user.relationship_counts as Json)?.following ??
+          (user.legacy as Json)?.friends_count,
+      ),
       verified: Boolean((user.verification as Json)?.verified),
+      joined: String(core.created_at ?? (user.legacy as Json)?.created_at ?? ""),
     };
   }
 
@@ -424,13 +491,11 @@ export class XSearch {
 
     const core = result.core as Json | undefined;
     const userResults = core?.user_results as Json | undefined;
-    const userCore = (userResults?.result as Json | undefined)?.core as
-      | Json
-      | undefined;
+    const author = XSearch.userFields(userResults?.result as Json | undefined);
 
     return {
       id: String(result.rest_id ?? legacy.id_str ?? ""),
-      screen_name: String(userCore?.screen_name ?? ""),
+      screen_name: author?.screen_name ?? "",
       created_at: String(legacy.created_at ?? ""),
       // X reports views as a string
       views: toInt((result.views as Json)?.count),
@@ -439,6 +504,10 @@ export class XSearch {
       replies: toInt(legacy.reply_count),
       quotes: toInt(legacy.quote_count),
       text: String(legacy.full_text ?? ""),
+      author_name: author?.name,
+      author_avatar: author?.avatar,
+      author_followers: author?.followers,
+      author_verified: author?.verified,
     };
   }
 }

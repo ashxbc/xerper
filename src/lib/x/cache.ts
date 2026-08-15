@@ -16,6 +16,13 @@ const store = new Map<string, Entry>();
 // Project accounts almost never change their avatar; results go stale quickly
 export const TTL_PROJECT = 30 * 24 * 3600 * 1000;
 export const TTL_IMPRESSIONS = 15 * 60 * 1000;
+// Discovery scans burn multiple burner-account requests per run, so results
+// are reused for a while rather than re-scanned on every call.
+export const TTL_DISCOVERY = 10 * 60 * 1000;
+// A handle's NFT-project verdict doesn't change quickly, and re-judging one
+// costs an X profile lookup, a tweet fetch, and a Groq call - cache it for a
+// day so repeat scans don't re-spend all three on the same handle.
+export const TTL_DISCOVERY_VERDICT = 24 * 3600 * 1000;
 
 const MAX_ENTRIES = 500;
 

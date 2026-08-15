@@ -15,11 +15,12 @@ const items = [
   {
     id: "terminal",
     label: "Alpha Terminal",
-    // Gem — alpha
+    // Gem — simple faceted diamond
     icon: (
       <>
-        <path d="M5.5 4h13L22 9.5 12 21 2 9.5z" />
-        <path d="M2 9.5h20" />
+        <path d="M6 3h12l4 6-10 13L2 9Z" />
+        <path d="M11 3 8 9l4 13 4-13-3-6" />
+        <path d="M2 9h20" />
       </>
     ),
   },
@@ -46,7 +47,9 @@ export default function Sidebar({ active, onChange }: Props) {
   return (
     // bottom bar on mobile, vertical rail from sm up
     <nav
-      className="fixed bottom-5 left-1/2 z-50 -translate-x-1/2 rounded-2xl bg-white p-1.5
+      // bottom-5 on mobile, raised further to clear the home indicator on
+      // notched phones (env(safe-area-inset-bottom)); vertical rail from sm up
+      className="fixed bottom-[max(1.25rem,env(safe-area-inset-bottom))] left-1/2 z-50 -translate-x-1/2 rounded-2xl bg-white p-1.5
                  sm:bottom-auto sm:left-5 sm:top-1/2 sm:translate-x-0 sm:-translate-y-1/2"
     >
       <ul className="flex flex-row gap-1 sm:flex-col">

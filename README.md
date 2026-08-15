@@ -1,36 +1,80 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Xerper
 
-## Getting Started
+Next.js 16 app that turns X (Twitter) activity into shareable "proof of work"
+cards, plus an **Alpha Terminal** that surfaces pre-mint NFT projects found by
+scanning X. The discovery scan runs automatically every 3 hours and stores
+everything in Supabase so the site always reflects the latest gems.
 
-First, run the development server:
+## Stack
+
+- Next.js 16 (App Router), React 19, Tailwind CSS 4
+- X's internal GraphQL endpoints via a pool of burner accounts
+- Groq (LLM) classifies candidate accounts as NFT projects or not
+- Supabase (Postgres) stores discovered projects + every scan run
+
+## Getting started
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Environment: copy `.env.local.example` to `.env.local` and fill in:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- **X burners** - `X_AUTH_TOKEN_1..3` / `X_CT0_1..3` (plus optional
+  `X_DISCOVERY_AUTH_TOKEN` / `X_DISCOVERY_CT0` for the dedicated discovery
+  burner), `PYTHON_BIN` (unused legacy), `GROQ_API_KEY`, `DISCOVERY_SECRET`.
+- **Supabase** - see below.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Supabase setup (gems storage)
 
-## Learn More
+1. Create a free project at <https://supabase.com>.
+2. Open the **SQL Editor** and run `supabase/schema.sql` - creates two tables:
+   - `nft_projects` - every discovered project. `handle` (lowercased) is the
+     unique dedup key; `status` is `added` (published to the site) or
+     `rejected`; `discovered_at` / `added_at` / `processed` record the
+     lifecycle so duplicates can never be re-added.
+   - `gems_scan_logs` - one row per scan run (success/partial/failed, how many
+     projects were found / new / skipped as duplicates, error details).
+3. Run `supabase/seed.sql` to preload the 5 verified projects already found
+   (so the site renders gems before the first scheduled scan). Idempotent.
+4. Add these env vars (see `supabase/.env.example`):
+   - `NEXT_PUBLIC_SUPABASE_URL` - Project Settings > API > Project URL
+   - `NEXT_PUBLIC_SUPABASE_ANON_KEY` - API > anon public
+   - `SUPABASE_SERVICE_ROLE_KEY` - API > service_role (**server only**, never
+     in the browser)
+   - `CRON_SECRET` - any random string guarding the scan endpoint
 
-To learn more about Next.js, take a look at the following resources:
+No RLS policies are needed: the site never talks to Supabase from the browser.
+All reads/writes go through API routes using the service-role key server-side.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Scheduling the scan (every 3 hours)
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+The scan itself is `GET /api/gems/run?cron=<CRON_SECRET>`. It runs a fresh
+scan, upserts new projects into `nft_projects` (existing handles are skipped
+as duplicates), and writes a row to `gems_scan_logs`. Pick one scheduler:
 
-## Deploy on Vercel
+- **Vercel** - `vercel.json` already declares the cron (`0 */3 * * *`,
+  every 3 hours). Set `CRON_SECRET` as an environment variable in the Vercel
+  dashboard; the `${CRON_SECRET}` in the path is interpolated automatically.
+- **Self-hosted** - add a crontab line:
+  ```
+  0 */3 * * * curl -fsS "https://YOUR-HOST/api/gems/run?cron=YOUR_CRON_SECRET" -o /dev/null
+  ```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+After each successful run the website updates automatically: `/api/gems`
+reads the `added` projects straight from Supabase (lowest follower count
+first), and the Alpha Terminal renders whatever is stored.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## How it works
+
+- **Proof of Work** (`/api/impressions`) - searches X for a user's posts
+  mentioning a project and sums their view counts into a cumulative growth
+  series, rendered as a shareable card (PNG export included).
+- **Discovery scan** (`src/lib/x/discovery.ts`) - runs fixed high-intent
+  queries for pre-mint NFT launches, dedupes candidate handles, hard-gates on
+  follower count (< 1,000), rejects accounts already minting (regex + OpenSea
+  check + Groq), and classifies the rest with Groq.
+- **Burners** (`src/lib/x/accounts.ts`) - three user-facing burners at
+  1 req/sec, plus a dedicated discovery burner at 5 req/sec so scans never
+  compete with real users' requests.

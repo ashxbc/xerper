@@ -4,7 +4,10 @@ import App from "@/components/App";
 export default function Home() {
   return (
     <div
-      className="relative h-screen w-screen overflow-hidden"
+      // h-dvh (dynamic viewport height) rather than h-screen: 100vh includes
+      // the mobile browser's URL-bar area, which crops content behind it and
+      // makes the layout jump when the bar collapses.
+      className="relative h-dvh w-screen overflow-hidden"
       style={{
         backgroundColor: "#1E2AEB",
         backgroundImage:

@@ -1,0 +1,11 @@
+[
+  "(\"free mint\" OR \"0 ETH mint\" OR \"mint is free\" OR \"gas only mint\") (NFT OR collection OR mint) -filter:replies -\"mint live\" -\"minted out\" -\"sold out\"",
+  "(\"WL open\" OR \"allowlist open\" OR \"whitelist spots\" OR \"allowlist applications\" OR \"GTD mint\") NFT -filter:replies -\"mint live\" -\"minted out\" -\"sold out\"",
+  "(\"stealth mint\" OR \"minting soon\" OR \"early mint\" OR \"mint in 24h\" OR \"upcoming mint\") (mint OR minting) -filter:replies -\"now minting\" -\"minted out\" -\"sold out\"",
+  "(\"new NFT collection\" OR \"alpha NFT\" OR \"early mint\" OR \"upcoming mint\" OR \"mint in 24h\") (NFT OR collection) -filter:replies -\"mint live\" -\"minted out\" -\"sold out\"",
+  "(\"free mint\" OR \"0 ETH mint\" OR \"gas only mint\" OR \"WL open\" OR \"allowlist open\" OR \"whitelist spots\") (NFT OR collection OR mint) -filter:replies -\"mint started\" -\"minted out\" -\"sold out\"",
+  "(\"stealth mint\" OR \"GTD mint\" OR \"alpha NFT\" OR \"early mint\" OR \"mint in 24h\" OR \"minting soon\") NFT -filter:replies -\"mint live\" -\"minted out\" -\"sold out\"",
+  "(\"allowlist applications\" OR \"GTD mint\" OR \"upcoming mint\" OR \"new NFT collection\" OR \"alpha NFT\") (mint OR minting) -filter:replies -\"now minting\" -\"minted out\" -\"sold out\"",
+  "(\"stealth mint\" OR \"minting soon\" OR \"free mint\" OR \"mint is free\" OR \"0 ETH mint\" OR \"gas only mint\") (NFT OR collection) -filter:replies -\"mint live\" -\"minted out\" -\"sold out\"",
+  "(\"new NFT collection\" OR \"alpha NFT\" OR \"early mint\" OR \"upcoming mint\" OR \"WL open\" OR \"allowlist open\" OR \"GTD mint\") (NFT OR collection OR mint) -filter:replies -\"mint live\" -\"minted out\" -\"sold out\""
+]

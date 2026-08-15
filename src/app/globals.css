@@ -6,3 +6,15 @@ body {
   padding: 0;
   height: 100%;
 }
+
+/* Slow upward drift for the Alpha Terminal card wall. The track holds two
+ * identical copies of the list, so translating it by exactly -50% loops
+ * seamlessly. */
+@keyframes marquee-up {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(-50%);
+  }
+}
