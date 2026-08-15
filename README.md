@@ -54,9 +54,19 @@ The scan itself is `GET /api/gems/run?cron=<CRON_SECRET>`. It runs a fresh
 scan, upserts new projects into `nft_projects` (existing handles are skipped
 as duplicates), and writes a row to `gems_scan_logs`. Pick one scheduler:
 
-- **Vercel** - `vercel.json` already declares the cron (`0 */3 * * *`,
-  every 3 hours). Set `CRON_SECRET` as an environment variable in the Vercel
-  dashboard; the `${CRON_SECRET}` in the path is interpolated automatically.
+- **GitHub Actions (free, every 3 hours)** - `.github/workflows/gems-scan.yml`
+  already declares the `0 */3 * * *` schedule. Add two secrets in the repo
+  (Settings > Secrets and variables > Actions):
+  - `GEMS_RUN_URL` - your deployed app URL, e.g. `https://your-app.vercel.app`
+  - `CRON_SECRET` - same value as the `CRON_SECRET` env var on Vercel
+  The job fires the request and exits; the scan completes server-side and
+  every run is recorded in `gems_scan_logs`.
+- **Vercel Cron (Hobby = once per day)** - free Vercel accounts only allow one
+  cron invocation per day (`0 */3 * * *` fails deployment on Hobby). If you
+  accept a daily scan instead, add a `vercel.json` with:
+  ```json
+  { "crons": [{ "path": "/api/gems/run?cron=${CRON_SECRET}", "schedule": "0 3 * * *" }] }
+  ```
 - **Self-hosted** - add a crontab line:
   ```
   0 */3 * * * curl -fsS "https://YOUR-HOST/api/gems/run?cron=YOUR_CRON_SECRET" -o /dev/null

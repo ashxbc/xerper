@@ -1,0 +1,26 @@
+name: Gems scan (every 3 hours)
+
+# Vercel's Hobby plan only allows one cron invocation per day, so the every-3h
+# schedule lives here instead: GitHub Actions is free and fires the deployed
+# /api/gems/run endpoint on time. The scan itself runs server-side; this job
+# just sends the request and exits.
+
+on:
+  schedule:
+    - cron: "0 */3 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger the gems scan
+        env:
+          URL: ${{ secrets.GEMS_RUN_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          # Fire-and-forget: the Vercel function keeps running the scan after
+          # the HTTP request returns, so we bail out after a short wait. Real
+          # success/failure lives in Supabase's gems_scan_logs table, not here.
+          curl -fsS -m 30 "$URL/api/gems/run?cron=$CRON_SECRET" \
+            || echo "request sent (scan continues server-side - see gems_scan_logs)"

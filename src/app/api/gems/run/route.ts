@@ -12,7 +12,8 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 900;
 
 /** Scheduled Gems Finding scan. Not meant for browsers: a scheduler calls
- *  this every three hours (see vercel.json / the crontab line in the docs).
+ *  this every three hours (see the GitHub Actions workflow in .github/ - Vercel
+ *  Hobby crons are limited to once per day - or the crontab line in the README).
  *
  *  If CRON_SECRET is set, callers must pass it via `?cron=` or the
  *  X-Cron-Secret header; a mismatch returns 404 so the route does not

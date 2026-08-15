@@ -1,8 +1,0 @@
-{
-  "crons": [
-    {
-      "path": "/api/gems/run?cron=${CRON_SECRET}",
-      "schedule": "0 */3 * * *"
-    }
-  ]
-}
