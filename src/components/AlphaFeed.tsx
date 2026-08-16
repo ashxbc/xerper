@@ -235,23 +235,27 @@ export default function AlphaFeed() {
 
   return (
     <>
-      {/* Cards flow left to right in a 4-column grid that wraps into rows
-          going down - the column grows vertically as more projects are
-          listed. A spacer above keeps the grid slightly down the viewport;
-          normal flow, so the sidebar stays untouched. */}
-      <div className="flex h-full w-full flex-col overflow-y-auto max-[479px]:scrollbar-hide">
-        <div className="h-[15%] shrink-0" aria-hidden="true" />
-        {/* Mobile: one centered column scaling down; sm+ keeps the
-            left-aligned multi-column grid. */}
-        <div className="grid w-full grid-cols-1 justify-items-center gap-4 pl-6 pr-6 min-[480px]:justify-items-start min-[480px]:grid-cols-2 xl:grid-cols-4">
-          {state.projects.map((project) => (
-            <ProjectCard
-              key={project.handle}
-              project={project}
-              onOpen={() => setSelected(project)}
-            />
-          ))}
+      {/* Gems-style fixed zones: a fixed top spacer the grid can never scroll
+          into (clears the logo / powered-by-valor header on mobile), then the
+          scrollable grid, then a fixed bottom zone so the last row stops
+          above the mobile menu bar (cleared by main's padding, like the
+          gems feed) and desktop mirrors the top gap. */}
+      <div className="flex h-full w-full flex-col">
+        <div className="h-16 shrink-0 min-[480px]:h-[15%]" aria-hidden="true" />
+        <div className="min-h-0 flex-1 overflow-y-auto max-[479px]:scrollbar-hide">
+          {/* Mobile: one centered column scaling down; sm+ keeps the
+              left-aligned multi-column grid. */}
+          <div className="grid w-full grid-cols-1 justify-items-center gap-4 pl-6 pr-6 min-[480px]:justify-items-start min-[480px]:grid-cols-2 xl:grid-cols-4">
+            {state.projects.map((project) => (
+              <ProjectCard
+                key={project.handle}
+                project={project}
+                onOpen={() => setSelected(project)}
+              />
+            ))}
+          </div>
         </div>
+        <div className="h-0 shrink-0 min-[480px]:h-20" aria-hidden="true" />
       </div>
 
       {/* Centered modal with the full campaign details */}
