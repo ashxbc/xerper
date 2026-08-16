@@ -22,9 +22,13 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+      # Must be Node 22+ (we use 24): @supabase/supabase-js requires the
+      # native WebSocket that only exists in Node >= 22. On Node 20 the
+      # scan runs fine but every Supabase write throws "Node.js detected but
+      # native WebSocket not found", so nothing is ever persisted.
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
       - run: npm ci
       - name: Run the gems scan
