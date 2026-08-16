@@ -241,7 +241,9 @@ export default function AlphaFeed() {
           normal flow, so the sidebar stays untouched. */}
       <div className="flex h-full w-full flex-col overflow-y-auto">
         <div className="h-[15%] shrink-0" aria-hidden="true" />
-        <div className="grid w-full grid-cols-1 justify-items-start gap-4 pl-6 pr-6 min-[480px]:grid-cols-2 xl:grid-cols-4">
+        {/* Mobile: one centered column scaling down; sm+ keeps the
+            left-aligned multi-column grid. */}
+        <div className="grid w-full grid-cols-1 justify-items-center gap-4 pl-6 pr-6 min-[480px]:justify-items-start min-[480px]:grid-cols-2 xl:grid-cols-4">
           {state.projects.map((project) => (
             <ProjectCard
               key={project.handle}
@@ -295,8 +297,7 @@ export default function AlphaFeed() {
                 <p className="text-[11px] uppercase tracking-wide text-[#536471]">
                   Prize pool
                 </p>
-                <p className="flex items-center justify-end gap-1 text-[15px] font-extrabold text-[#1E2AEB]">
-                  <CoinIcon className="h-4 w-4 text-[#1E2AEB]" />
+                <p className="text-[15px] font-extrabold text-[#1E2AEB]">
                   {selected.prize_pool || "Not stated"}
                 </p>
               </div>

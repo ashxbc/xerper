@@ -376,6 +376,56 @@ function esc(value: string): string {
   return value.replace(/([_*`[])/g, "\\$1");
 }
 
+/** True when Telegram rejected the message as unparseable Markdown - the
+ *  legacy parser chokes on unescaped specials (e.g. an underscore inside an
+ *  @handle), which would otherwise 400 the whole reply. */
+function isEntityParseError(error: unknown): boolean {
+  const response = (error as {
+    response?: { error_code?: number; description?: string };
+  })?.response;
+  return (
+    response?.error_code === 400 &&
+    /can't parse entities/i.test(response?.description ?? "")
+  );
+}
+
+type ReplyExtra = Parameters<Context["reply"]>[1];
+
+/** Reply with legacy Markdown, falling back to plain text when the parser
+ *  rejects the content - LLM/user text is unpredictable, so formatting must
+ *  never block a reply. */
+async function safeReply(
+  ctx: Context,
+  text: string,
+  extra?: ReplyExtra,
+): Promise<void> {
+  try {
+    await ctx.reply(text, { ...extra, parse_mode: "Markdown" });
+  } catch (error) {
+    if (!isEntityParseError(error)) throw error;
+    const { parse_mode: _omitted, ...plain } = extra ?? {};
+    void _omitted;
+    await ctx.reply(text, plain);
+  }
+}
+
+/** safeReply for the photo preview - same Markdown fallback for the caption. */
+async function safeReplyPhoto(
+  ctx: Context,
+  photo: string,
+  caption: string,
+  extra?: ReplyExtra,
+): Promise<void> {
+  try {
+    await ctx.replyWithPhoto(photo, { ...extra, caption, parse_mode: "Markdown" });
+  } catch (error) {
+    if (!isEntityParseError(error)) throw error;
+    const { parse_mode: _omitted, ...plain } = extra ?? {};
+    void _omitted;
+    await ctx.replyWithPhoto(photo, { ...plain, caption });
+  }
+}
+
 function renderDraft(draft: ListingDraft): string {
   const lines = [
     `🏷️ *${esc(draft.project_name || "Unknown")}*`,
@@ -554,10 +604,7 @@ async function main(): Promise<void> {
       const extracted = await extractListingFromText(text);
       const draft: ListingDraft = { ...extracted, campaign_url: "" };
       setSession(chatId, { phase: "draft", draft });
-      await ctx.reply(renderDraft(draft), {
-        parse_mode: "Markdown",
-        ...draftKeyboard(),
-      });
+      await safeReply(ctx, renderDraft(draft), draftKeyboard());
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error("[telegram-bot]", message);
@@ -570,29 +617,20 @@ async function main(): Promise<void> {
   /** Show the final preview (draft + X handle + campaign link) with the
    *  List/Cancel confirmation buttons. */
   async function showConfirm(ctx: Context, draft: ListingDraft, profile: UserFields) {
+    // The handle must be escaped like any other user text - an underscore in
+    // e.g. @Delphi_fyi otherwise breaks Telegram's Markdown parser.
+    const handle = esc(profile.screen_name || "");
     const preview =
       renderDraft(draft) +
       "\n\n" +
-      `🐦 *X:* @${profile.screen_name || ""}` +
+      `🐦 *X:* @${handle}` +
       (draft.campaign_url ? `\n🔗 *Campaign link:* ${esc(draft.campaign_url)}` : "");
     if (profile.avatar) {
-      await ctx
-        .replyWithPhoto(profile.avatar, {
-          caption: preview,
-          parse_mode: "Markdown",
-          ...confirmKeyboard(),
-        })
-        .catch(() =>
-          ctx.reply(preview, {
-            parse_mode: "Markdown",
-            ...confirmKeyboard(),
-          }),
-        );
+      await safeReplyPhoto(ctx, profile.avatar, preview, confirmKeyboard()).catch(() =>
+        safeReply(ctx, preview, confirmKeyboard()),
+      );
     } else {
-      await ctx.reply(preview, {
-        parse_mode: "Markdown",
-        ...confirmKeyboard(),
-      });
+      await safeReply(ctx, preview, confirmKeyboard());
     }
   }
 
@@ -624,10 +662,7 @@ async function main(): Promise<void> {
         if (error) return ctx.reply(`⚠️ ${error} Send the task again, or press Cancel.`);
         const draft = { ...session.draft, task: ctx.message.text.trim() };
         setSession(chatId, { phase: "draft", draft });
-        return ctx.reply(renderDraft(draft), {
-          parse_mode: "Markdown",
-          ...draftKeyboard(),
-        });
+        return safeReply(ctx, renderDraft(draft), draftKeyboard());
       }
 
       case "edit_details": {
@@ -635,19 +670,13 @@ async function main(): Promise<void> {
         if (error) return ctx.reply(`⚠️ ${error} Send the details again, or press Cancel.`);
         const draft = { ...session.draft, details: ctx.message.text.trim() };
         setSession(chatId, { phase: "draft", draft });
-        return ctx.reply(renderDraft(draft), {
-          parse_mode: "Markdown",
-          ...draftKeyboard(),
-        });
+        return safeReply(ctx, renderDraft(draft), draftKeyboard());
       }
 
       case "edit_step_add": {
         if (session.draft.steps.length >= MAX_STEPS) {
           setSession(chatId, { phase: "draft", draft: session.draft });
-          return ctx.reply(renderDraft(session.draft), {
-            parse_mode: "Markdown",
-            ...draftKeyboard(),
-          });
+          return safeReply(ctx, renderDraft(session.draft), draftKeyboard());
         }
         const error = validateStep(ctx.message.text);
         if (error) return ctx.reply(`⚠️ ${error} Send the step again, or press Cancel.`);
@@ -656,10 +685,7 @@ async function main(): Promise<void> {
           steps: [...session.draft.steps, ctx.message.text.trim()],
         };
         setSession(chatId, { phase: "draft", draft });
-        return ctx.reply(renderDraft(draft), {
-          parse_mode: "Markdown",
-          ...draftKeyboard(),
-        });
+        return safeReply(ctx, renderDraft(draft), draftKeyboard());
       }
 
       case "edit_step_replace": {
@@ -669,10 +695,7 @@ async function main(): Promise<void> {
         steps[session.index] = ctx.message.text.trim();
         const draft = { ...session.draft, steps };
         setSession(chatId, { phase: "draft", draft });
-        return ctx.reply(renderDraft(draft), {
-          parse_mode: "Markdown",
-          ...draftKeyboard(),
-        });
+        return safeReply(ctx, renderDraft(draft), draftKeyboard());
       }
 
       case "awaiting_handle": {
@@ -948,10 +971,10 @@ async function main(): Promise<void> {
 
     if (result.ok) {
       clearSession(chatId);
-      return ctx.reply(
+      return safeReply(
+        ctx,
         `✅ *Listed successfully.*\n\n` +
-          `${esc(draft.project_name)} (@${handle}) is now live on the site.`,
-        { parse_mode: "Markdown" },
+          `${esc(draft.project_name)} (@${esc(handle)}) is now live on the site.`,
       );
     }
 

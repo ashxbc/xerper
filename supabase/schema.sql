@@ -118,6 +118,12 @@ create index if not exists projects_status_idx
 create index if not exists projects_listed_at_idx
   on public.projects (listed_at desc);
 
+-- Tables created before these columns existed need them added explicitly -
+-- `create table if not exists` is a no-op on an existing table, so the new
+-- fields must be added with standalone alters. Idempotent - safe to re-run.
+alter table public.projects add column if not exists prize_pool text not null default '';
+alter table public.projects add column if not exists campaign_url text not null default '';
+
 -- One row per first-time visitor's onboarding/follow flow (the modal that
 -- asks them to follow Valor). Keyed by a client-generated session id; each
 -- step of the flow stamps its own timestamp so the funnel is fully visible.
