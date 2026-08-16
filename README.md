@@ -50,42 +50,77 @@ All reads/writes go through API routes using the service-role key server-side.
 
 ## Scheduling the scan (every 3 hours)
 
-The scan itself is `GET /api/gems/run?cron=<CRON_SECRET>`. It runs a fresh
-scan, upserts new projects into `nft_projects` (existing handles are skipped
-as duplicates), and writes a row to `gems_scan_logs`. Pick one scheduler:
+**The scan runs directly inside the GitHub Actions job - no HTTP endpoint is
+involved.** A full scan takes 4-10 minutes at the conservative 5s/request
+pacing, and a multi-minute HTTP request fails on the free tier (an edge in
+front of Vercel returns 524 once it gives up waiting, and the function itself
+is capped at 300s). The Actions VM has a 6-hour budget, so the job does the
+scanning itself: it talks to X on the discovery burner, classifies with Groq,
+and writes results + a `gems_scan_logs` row straight to Supabase.
 
-- **GitHub Actions (free, every 3 hours)** - `.github/workflows/gems-scan.yml`
-  already declares the `0 */3 * * *` schedule. Add two secrets in the repo
-  (Settings > Secrets and variables > Actions):
-  - `GEMS_RUN_URL` - your deployed app URL with **no trailing slash**, e.g.
-    `https://your-app.vercel.app` (a trailing slash makes Vercel redirect the
-    request before the endpoint runs; the workflow also strips it and follows
-    redirects, so `http://` or a trailing slash are handled automatically)
-  - `CRON_SECRET` - same value as the `CRON_SECRET` env var on Vercel
-  The job waits for the scan to finish (up to ~5 min) and reports the real
-  HTTP status; a non-2xx response - or a missing secret - fails the job
-  loudly so a broken trigger shows up red in the Actions tab instead of
-  silently doing nothing. You can also hit "Run workflow" there to trigger
-  a scan manually at any time.
+`.github/workflows/gems-scan.yml` declares the `0 */3 * * *` schedule. Add
+**five secrets** in the repo (Settings > Secrets and variables > Actions):
+
+- `X_DISCOVERY_AUTH_TOKEN` + `X_DISCOVERY_CT0` - the dedicated discovery
+  burner (same values as the local `.env.local` ones - and note these must be
+  fresh/valid: X rejects expired sessions with 401/403, which fails the scan)
+- `GROQ_API_KEY` - candidate classifier
+- `NEXT_PUBLIC_SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` - storage (the
+  service-role key is safe here: it lives in a private repo secret, never in
+  the client)
+
+The workflow runs `scripts/run-scan.ts` (via `tsx`), which logs a `running`
+row first and finalizes it when the scan finishes - exactly like the old
+endpoint. `GEMS_RUN_URL` / `CRON_SECRET` are **no longer needed** for the
+scheduler (the endpoint itself still exists for manual triggers - see below).
+You can hit **Run workflow** in the Actions tab to trigger a scan manually at
+any time.
 
 ### Verifying the scheduler
 
-Every call to `/api/gems/run` now opens a `running` row in `gems_scan_logs`
-the moment it arrives, then finalizes it to `success` / `partial` / `failed`
-when the scan finishes. So Supabase tells you the truth about the schedule:
+Every run opens a `running` row in `gems_scan_logs` the moment it starts,
+then finalizes it to `success` / `partial` / `failed` when the scan finishes.
+So Supabase tells you the truth about the schedule:
 
 - Rows appearing every 3 hours = the scheduler is healthy.
-- A `running` row stuck on `running` = the call arrived but the function died
-  mid-scan (check the budget section below).
-- No rows at all = the workflow never fired or the secrets are missing -
-  check the Actions tab for scheduled runs and the secret values.
+- A `running` row stuck on `running` = the job was killed mid-scan (check
+  the Actions log / `timeout-minutes`).
+- No rows at all = the workflow never fired - check the Actions tab for
+  scheduled runs and the secret values.
+- A `failed` row with a message in `error` = the scan could not run at all.
+  The `error` column names the cause - almost always one of:
+  - `No discovery session configured` - `X_DISCOVERY_AUTH_TOKEN` /
+    `X_DISCOVERY_CT0` are missing on the host (most common; the scan is
+    separate from the numbered burners and must be configured everywhere the
+    scan runs, not just in `.env.local`).
+  - `X rejected the discovery session (401/403)` - the discovery burner's
+    session expired; refresh both values from a logged-in browser.
+  - `X rotated the search endpoint...` - the GraphQL query ID could not be
+    rediscovered; the scan normally self-heals this, so it should be rare.
+- A `partial` row with a message in `error` = some queries failed but the
+  rest of the scan ran (`3 of 9 queries failed - ...`), or the storage write
+  partly failed. The counts in the row are still accurate for what ran.
+- All-zero `success` rows now mean the scan genuinely ran and found nothing -
+  a quiet window, not a hidden failure. To sanity-check the pipeline locally:
+  `node --env-file=.env.local scripts/diagnose-x-search.mjs` (one request on
+  the discovery burner) prints which failure mode applies.
 
 One-time migration: if you created the tables before this change, re-run
 `supabase/schema.sql` - it widens the scan-logs `status` column to admit
 `running` rows (idempotent, safe to re-run).
-- **Vercel Cron (Hobby = once per day)** - free Vercel accounts only allow one
-  cron invocation per day (`0 */3 * * *` fails deployment on Hobby). If you
-  accept a daily scan instead, add a `vercel.json` with:
+
+### Manual trigger (`/api/gems/run`)
+
+The endpoint still exists for one-off manual scans: `GET
+/api/gems/run?cron=<CRON_SECRET>` (or the `X-Cron-Secret` header). Note it
+runs the scan inline and can take ~5 minutes - call it from a client that can
+wait (e.g. `curl` on your own machine). If you call it through an edge that
+caps response time (Cloudflare's ~100s proxy limit on free plans), you may
+see an HTTP 524 even though the function keeps running server-side and
+finalizes its log row - check `gems_scan_logs` rather than trusting the
+HTTP response in that case. Other schedulers:
+- **Vercel Cron (Hobby = once per day)** - free Vercel accounts only allow
+  one cron invocation per day. Add a `vercel.json` with:
   ```json
   { "crons": [{ "path": "/api/gems/run?cron=${CRON_SECRET}", "schedule": "0 3 * * *" }] }
   ```
@@ -94,23 +129,21 @@ One-time migration: if you created the tables before this change, re-run
   0 */3 * * * curl -fsS "https://YOUR-HOST/api/gems/run?cron=YOUR_CRON_SECRET" -o /dev/null
   ```
 
-### Free-plan (Vercel Hobby) scan budget
+### Scan budget
 
-Hobby caps function duration at **300s** and the routes declare
-`maxDuration = 300` accordingly. The scan budget is configurable via env vars
-and defaults to values that fit inside that window:
+The defaults (`DISCOVERY_PAGES` 2, `DISCOVERY_MAX_CANDIDATES` 25,
+`DISCOVERY_TIME_BUDGET_MS` 240000) are sized to fit inside Vercel's 300s
+function cap for anyone running the endpoint route. The GitHub Actions job
+**overrides them for full depth** - 3 pages per query, 50 candidates, a
+25-minute wall-clock budget - since a VM has no such cap:
 
-- `DISCOVERY_PAGES` (default 2) - pages fetched per query
+- `DISCOVERY_PAGES` (workflow: 3) - pages fetched per query
 - `DISCOVERY_PAGE_SIZE` (default 50) - posts per page
-- `DISCOVERY_MAX_CANDIDATES` (default 25) - unique handles evaluated per run
+- `DISCOVERY_MAX_CANDIDATES` (workflow: 50) - unique handles evaluated per run
 - `DISCOVERY_MAX_FOLLOWERS` (default 1000) - follower ceiling
-- `DISCOVERY_TIME_BUDGET_MS` (default 240000) - hard wall-clock cap on the
-  scan so it always finishes inside the 300s function limit and actually gets
-  stored + logged. Lower it if scans still time out.
-
-If scans time out at 300s, lower `DISCOVERY_MAX_CANDIDATES` (the dominant
-cost); if you upgrade to Pro or self-host, raise the limits and bump the
-routes' `maxDuration` back up.
+- `DISCOVERY_TIME_BUDGET_MS` (workflow: 1500000) - hard wall-clock cap on the
+  scan so it always finishes and actually gets stored + logged. The 5s/request
+  pacing on the discovery burner is unchanged (account health).
 
 After each successful run the website updates automatically: `/api/gems`
 reads the `added` projects straight from Supabase (lowest follower count

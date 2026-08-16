@@ -1,14 +1,15 @@
 name: Gems scan (every 3 hours)
 
-# Vercel's Hobby plan only allows one cron invocation per day, so the every-3h
-# schedule lives here instead: GitHub Actions is free and fires the deployed
-# /api/gems/run endpoint on time.
+# The scan runs directly inside this job on a real VM: it talks to X on the
+# dedicated discovery burner, classifies candidates with Groq, and writes
+# results + a scan-log row straight to Supabase. No HTTP endpoint is in the
+# middle, so there is no edge or function timeout to hit.
 #
-# This job deliberately waits for the real HTTP response (up to ~5 minutes):
-# /api/gems/run returns only after the scan finishes, so waiting keeps the
-# connection open until Vercel completes the function and writes the scan log.
-# Any non-2xx status fails the job loudly so a broken trigger shows up red in
-# the Actions tab instead of silently doing nothing.
+# Why not fire /api/gems/run anymore? A full scan takes 4-10 minutes at the
+# conservative 5s/request pacing, and a multi-minute HTTP request fails on
+# the free tier: an edge in front of Vercel (e.g. Cloudflare's ~100s proxy
+# cap) returns HTTP 524 before the scan replies, and the function itself is
+# capped at 300s. A GitHub Actions VM has a 6-hour budget instead.
 
 on:
   schedule:
@@ -18,51 +19,25 @@ on:
 jobs:
   scan:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
-      - name: Trigger the gems scan
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Run the gems scan
         env:
-          URL: ${{ secrets.GEMS_RUN_URL }}
-          CRON_SECRET: ${{ secrets.CRON_SECRET }}
-        run: |
-          set -uo pipefail
-
-          if [ -z "$URL" ]; then
-            echo "::error::GEMS_RUN_URL secret is not set - add it under Settings > Secrets and variables > Actions"
-            exit 1
-          fi
-          if [ -z "$CRON_SECRET" ]; then
-            echo "::error::CRON_SECRET secret is not set - add it under Settings > Secrets and variables > Actions"
-            exit 1
-          fi
-
-          # Normalize the base URL: strip any trailing slash (a trailing slash
-          # would join into //api/gems/run, which Vercel 308-redirects before
-          # the endpoint runs) and force https.
-          BASE="${URL%/}"
-          case "$BASE" in
-            http://*) BASE="https://${BASE#http://}" ;;
-          esac
-
-          # -L follows any remaining redirect (e.g. a bare domain bouncing to
-          # www) so a 308 never hides the real result; -m 290 keeps the
-          # connection open for the whole scan (the endpoint's maxDuration is
-          # 300s and the scan is budgeted to ~240s). Without -f we capture the
-          # response body even on HTTP errors.
-          response=$(curl -sSL -m 290 -w $'\n%{http_code}' "$BASE/api/gems/run?cron=$CRON_SECRET") || {
-            code=$?
-            echo "::error::Gems scan trigger failed (curl exit code $code) - check GEMS_RUN_URL and that the app is deployed"
-            exit 1
-          }
-          body=$(printf '%s' "$response" | sed '$d')
-          code=$(printf '%s' "$response" | tail -n 1)
-
-          echo "HTTP $code"
-          printf '%s\n' "$body"
-
-          case "$code" in
-            2*) echo "Gems scan completed OK - see gems_scan_logs in Supabase" ;;
-            *)
-              echo "::error::Gems scan returned HTTP $code - check the Vercel env vars (Supabase URL / service role key / CRON_SECRET) and the function logs"
-              exit 1
-              ;;
-          esac
+          X_DISCOVERY_AUTH_TOKEN: ${{ secrets.X_DISCOVERY_AUTH_TOKEN }}
+          X_DISCOVERY_CT0: ${{ secrets.X_DISCOVERY_CT0 }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # No serverless 300s cap here - restore the full-depth scan (3
+          # pages per query, 50 candidates, 25-minute wall-clock budget).
+          # The 5s/request pacing still protects the discovery burner.
+          DISCOVERY_PAGES: "3"
+          DISCOVERY_MAX_CANDIDATES: "50"
+          DISCOVERY_TIME_BUDGET_MS: "1500000"
+        run: npx tsx scripts/run-scan.ts

@@ -234,6 +234,17 @@ export class XSearch {
         }
       }
 
+      // X returned entries but none of them parsed - the response schema has
+      // probably changed under us. Shout about it, because it makes a scan
+      // look like "quiet" when it actually found plenty.
+      if (fresh === 0 && entries.length > 0) {
+        console.warn(
+          `[x] SearchTimeline returned ${entries.length} entries for query ` +
+            `"${query.slice(0, 80)}" but 0 parsed as posts - X likely changed ` +
+            "the response shape",
+        );
+      }
+
       // No new posts, or nowhere left to go
       if (fresh === 0 || !nextCursor || nextCursor === cursor) break;
       cursor = nextCursor;
@@ -384,6 +395,13 @@ export class XSearch {
       if (response.status === 429) {
         throw new RateLimited("rate limited by X");
       }
+      // A hard 404 means X rotated this GraphQL operation's query ID (a
+      // nonexistent handle comes back as 200 with a null result, not 404).
+      // Throw so callers can rediscover the ID instead of silently skipping
+      // every candidate.
+      if (response.status === 404) {
+        throw new EndpointMoved("UserByScreenName endpoint moved");
+      }
       if (!response.ok) {
         console.error(
           `[x] UserByScreenName(${handle}) returned ${response.status}`,
@@ -400,7 +418,9 @@ export class XSearch {
       }
       return fields;
     } catch (error) {
-      if (error instanceof RateLimited) throw error;
+      if (error instanceof RateLimited || error instanceof EndpointMoved) {
+        throw error;
+      }
       console.error(
         `[x] UserByScreenName(${handle}) failed:`,
         error instanceof Error ? error.message : error,

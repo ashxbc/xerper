@@ -66,21 +66,47 @@ export async function GET(request: Request) {
   try {
     const result = await runDiscovery({ force: true, logId: logId ?? undefined });
 
-    // The scan ran but storing it may have failed - surface that so a
-    // partially-persisted run is visible rather than silent.
+    // The scan ran but storing it may have failed - that means any found
+    // projects will not reach the site, so fail loudly instead of reporting
+    // a cheerful 200. The scan-log row already carries the full counts.
     if (result.persistence?.error) {
       console.error("[gems/run]", result.persistence.error);
+      return NextResponse.json(
+        {
+          ok: false,
+          error: `Scan completed but storage failed: ${result.persistence.error}`,
+        },
+        { status: 502 },
+      );
     }
 
     return NextResponse.json({
       ok: true,
       generated_at: result.generated_at,
       rate_limited: result.rate_limited,
+      // Full scan picture, so the scheduler's output shows what actually
+      // happened - not just the four project counters.
+      queries_run: result.queries_run,
+      queries_skipped: result.queries_skipped,
+      queries_total: result.queries_total,
+      posts_scanned: result.posts_scanned,
+      candidates_considered: result.candidates_considered,
+      candidates_lookup_failed: result.candidates_lookup_failed,
+      candidates_over_follower_limit: result.candidates_over_follower_limit,
+      candidates_already_minting: result.candidates_already_minting,
+      candidates_classification_failed:
+        result.candidates_classification_failed,
       projects_found: result.projects.length,
       projects_new: result.persistence?.projects_new ?? 0,
       projects_skipped_duplicates:
         result.persistence?.projects_skipped_duplicates ?? 0,
+      projects_rejected: result.rejected.length,
       log_inserted: result.persistence?.log_inserted ?? false,
+      ...(result.queries_skipped > 0
+        ? {
+            warning: `Scan was partial: ${result.queries_skipped} of ${result.queries_total} queries failed`,
+          }
+        : {}),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";

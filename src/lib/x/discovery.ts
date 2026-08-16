@@ -1,9 +1,21 @@
 import type { PersistenceStats } from "../gems-store";
 import { persistScanRun } from "../gems-store";
 import * as cache from "./cache";
-import { acquireDiscoveryAccount, reportDiscoveryRateLimited } from "./accounts";
+import {
+  acquireDiscoveryAccount,
+  isDiscoveryConfigured,
+  reportDiscoveryRateLimited,
+} from "./accounts";
+import { discover } from "./endpoints";
 import { classifyNftProject } from "../groq";
-import { RateLimited, XSearch, type Post } from "./search";
+import {
+  AuthFailed,
+  EndpointMoved,
+  RateLimited,
+  XSearch,
+  type Post,
+  type UserFields,
+} from "./search";
 import discoveryQueries from "./discoveryQueries.json";
 
 /** Scans a fixed set of high-intent NFT-launch search queries, then
@@ -74,6 +86,9 @@ export type DiscoveryResult = {
   queries_total: number;
   queries_run: number;
   queries_skipped: number;
+  // First transient query failure, when any - recorded on the scan-log row
+  // so a partial run explains itself.
+  queries_error?: string;
   posts_scanned: number;
   candidates_considered: number;
   candidates_lookup_failed: number;
@@ -123,6 +138,38 @@ function hasStartedMinting(bio: string, recentTweet: string): boolean {
 
 let discoveryInFlight: Promise<DiscoveryResult> | null = null;
 
+// X rotates GraphQL query IDs on every deploy. endpoints.ts discover()
+// re-scrapes them from X's bundles; we call it at most once per warm
+// instance, the first time a 404 proves the IDs are stale.
+let queryIdHealed = false;
+
+/** Run `fn`, and if X says the query ID moved (404), rediscover the IDs once
+ *  and retry. A second EndpointMoved propagates - after a successful heal a
+ *  fresh 404 means the endpoint itself is gone, which the caller should
+ *  surface rather than swallow. */
+async function withQueryIdHeal<T>(
+  fn: () => Promise<T>,
+  authToken: string,
+  ct0: string,
+): Promise<T> {
+  try {
+    return await fn();
+  } catch (error) {
+    if (!(error instanceof EndpointMoved) || queryIdHealed) throw error;
+    queryIdHealed = true;
+    console.warn("[discovery] X rotated a query ID - rediscovering from bundles");
+    try {
+      await discover(authToken, ct0);
+    } catch (healError) {
+      console.error(
+        "[discovery] query ID rediscovery failed:",
+        healError instanceof Error ? healError.message : healError,
+      );
+    }
+    return await fn();
+  }
+}
+
 /** Run the discovery scan, returning the cached result when available.
  *
  *  Concurrent callers collapse onto one shared run, so React Strict Mode's
@@ -165,11 +212,27 @@ export async function runDiscovery(
 }
 
 async function scanDiscovery(): Promise<DiscoveryResult> {
+  // Refuse to run without the dedicated burner: a missing X_DISCOVERY_*
+  // pair would otherwise make every query "fail" and the whole scan log as
+  // a quiet success with all zeros - the exact false-negative this pipeline
+  // was built to avoid. Fail loudly instead, and let the caller record the
+  // real reason.
+  if (!isDiscoveryConfigured()) {
+    throw new Error(
+      "No discovery session configured - set X_DISCOVERY_AUTH_TOKEN and " +
+        "X_DISCOVERY_CT0 environment variables (the scan cannot run without " +
+        "the dedicated burner account)",
+    );
+  }
+
   const startedAt = Date.now();
   const evaluated = new Map<string, DiscoveryVerdict>();
   const candidates = new Map<string, { handle: string; query: string; post: Post }>();
   let queriesRun = 0;
   let queriesSkipped = 0;
+  // First non-structural query failure, carried onto the scan-log row so a
+  // partial run explains itself instead of just showing lower counts.
+  let firstQueryError: string | undefined;
   let postsScanned = 0;
   let candidatesConsidered = 0;
   // Once X 429s the single discovery account, acquireDiscoveryAccount() would
@@ -197,11 +260,12 @@ async function scanDiscovery(): Promise<DiscoveryResult> {
     try {
       const account = await acquireDiscoveryAccount();
       const client = new XSearch(account.authToken, account.ct0);
-      result = await client.search(
-        query,
-        PAGES_PER_QUERY,
-        PAGE_SIZE,
-        PAGE_INTERVAL_MS,
+      // A 404 (rotated query ID) is healed once and retried; a second 404
+      // propagates as EndpointMoved and aborts the scan below.
+      result = await withQueryIdHeal(
+        () => client.search(query, PAGES_PER_QUERY, PAGE_SIZE, PAGE_INTERVAL_MS),
+        account.authToken,
+        account.ct0,
       );
     } catch (error) {
       if (error instanceof RateLimited) {
@@ -209,10 +273,32 @@ async function scanDiscovery(): Promise<DiscoveryResult> {
         console.warn("[discovery] discovery account is cooling down - stopping scan");
         break;
       }
+      if (error instanceof AuthFailed) {
+        // The discovery session itself is dead - every remaining query would
+        // fail the same way. Abort so the run is logged as failed with this
+        // exact reason instead of all-zero "success".
+        throw new Error(
+          "X rejected the discovery session (401/403) - refresh " +
+            "X_DISCOVERY_AUTH_TOKEN and X_DISCOVERY_CT0 from a logged-in " +
+            "browser",
+        );
+      }
+      if (error instanceof EndpointMoved) {
+        // The heal ran but the fresh ID still 404s - the endpoint is gone or
+        // unreachable. Also fatal: retrying the other eight queries is futile.
+        throw new Error(
+          "X rotated the search endpoint and the new ID could not be found - " +
+            "the scan cannot run until it is restored",
+        );
+      }
+      // Anything else is a transient failure - note it and keep scanning the
+      // remaining themes.
+      firstQueryError ??=
+        error instanceof Error ? error.message : String(error);
       console.error(
         "[discovery] search failed:",
         query,
-        error instanceof Error ? error.message : error,
+        firstQueryError,
       );
       queriesSkipped++;
       continue;
@@ -241,6 +327,16 @@ async function scanDiscovery(): Promise<DiscoveryResult> {
         }
       }
     }
+  }
+
+  // Every query failed (none was rate-limited, or the loop would have
+  // stopped early with rateLimited set). Log the run as failed with the
+  // first error rather than returning a silent all-zero success.
+  if (queriesRun === 0) {
+    throw new Error(
+      `All ${QUERIES.length} search queries failed - the scan could not run. ` +
+        (firstQueryError ? `First error: ${firstQueryError}` : "No query completed."),
+    );
   }
 
   for (const candidate of candidates.values()) {
@@ -285,13 +381,15 @@ async function scanDiscovery(): Promise<DiscoveryResult> {
   }
 
   console.log(
-    `[discovery] considered ${candidatesConsidered} candidates - ` +
+    `[discovery] ${queriesRun}/${QUERIES.length} queries, ${postsScanned} posts, ` +
+      `considered ${candidatesConsidered} candidates - ` +
       `${stats.lookupFailed} lookup failed, ` +
       `${stats.overFollowerLimit} over follower limit, ` +
       `${stats.alreadyMinting} already minting/minted, ` +
       `${stats.classificationFailed} classification failed, ` +
       `${projects.length} true, ${rejected.length} false` +
-      (rateLimited ? " - stopped early: rate limited by X" : ""),
+      (rateLimited ? " - stopped early: rate limited by X" : "") +
+      (queriesSkipped > 0 ? ` - ${queriesSkipped} queries failed` : ""),
   );
 
   const output: DiscoveryResult = {
@@ -301,6 +399,7 @@ async function scanDiscovery(): Promise<DiscoveryResult> {
     queries_total: QUERIES.length,
     queries_run: queriesRun,
     queries_skipped: queriesSkipped,
+    queries_error: firstQueryError,
     posts_scanned: postsScanned,
     candidates_considered: candidatesConsidered,
     candidates_lookup_failed: stats.lookupFailed,
@@ -366,8 +465,20 @@ async function evaluateCandidate(
 
   // A RateLimited here is intentionally left uncaught - it propagates up to
   // runDiscovery's candidate loop, which stops the whole scan rather than
-  // treating one 429 as a normal lookup failure.
-  const profile = await client.userByScreenName(handle);
+  // treating one 429 as a normal lookup failure. A rotated query ID (404) is
+  // healed once and retried; if a fresh ID still 404s, the handle simply
+  // doesn't exist, which is an ordinary failed lookup.
+  let profile: UserFields | null = null;
+  try {
+    profile = await withQueryIdHeal(
+      () => client.userByScreenName(handle),
+      account.authToken,
+      account.ct0,
+    );
+  } catch (error) {
+    if (!(error instanceof EndpointMoved)) throw error;
+    // Healed but the fresh ID still 404s - treat as a normal failed lookup.
+  }
   if (!profile) {
     stats.lookupFailed++;
     console.log(`[discovery] SKIP  @${handle} - profile lookup failed`);
@@ -393,8 +504,19 @@ async function evaluateCandidate(
     const tweetClient = new XSearch(tweetAccount.authToken, tweetAccount.ct0);
     let recentResult;
     try {
-      recentResult = await tweetClient.search(`from:${handle}`, 1, 1);
-    } catch {
+      recentResult = await withQueryIdHeal(
+        () => tweetClient.search(`from:${handle}`, 1, 1),
+        tweetAccount.authToken,
+        tweetAccount.ct0,
+      );
+    } catch (error) {
+      if (error instanceof EndpointMoved) {
+        console.warn(
+          `[discovery] tweet fetch for @${handle} failed after query-ID heal - using empty`,
+        );
+      } else {
+        throw error;
+      }
       recentResult = { posts: [] as Post[], rateLimited: false };
     }
     // XSearch.search() already converts a 429 into rateLimited:true rather

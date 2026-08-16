@@ -161,7 +161,17 @@ export async function persistScanRun(
   // failure still leaves a complete record of the run.
   const final: ScanLogFinal = {
     finished_at: now,
-    status: result.rate_limited || stats.error ? "partial" : "success",
+    // A run where no query succeeded is a failure, not a quiet scan. Any
+    // skipped query, real rate limit, or storage error makes the run partial
+    // so the log row explains itself instead of looking like an all-zero
+    // "success" - which is what the scheduled run used to record whenever
+    // the discovery account was misconfigured or down.
+    status:
+      result.queries_run === 0
+        ? "failed"
+        : result.queries_skipped > 0 || result.rate_limited || stats.error
+          ? "partial"
+          : "success",
     projects_found: result.projects.length,
     projects_new: stats.projects_new,
     projects_skipped_duplicates: stats.projects_skipped_duplicates,
@@ -170,7 +180,11 @@ export async function persistScanRun(
     queries_run: result.queries_run,
     posts_scanned: result.posts_scanned,
     rate_limited: result.rate_limited,
-    error: stats.error,
+    // Prefer the storage error; otherwise explain any partial run (e.g.
+    // "3 of 9 queries failed - ...") so a partial scan is self-diagnosing.
+    error:
+      stats.error ??
+      (result.queries_skipped > 0 ? result.queries_error : undefined),
   };
 
   const finalize = logId

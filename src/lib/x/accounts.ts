@@ -126,6 +126,13 @@ function getDiscoveryState(): AccountState | null {
   return discoveryState;
 }
 
+/** True when the dedicated discovery burner is configured. The scan refuses
+ *  to run without it - a missing pair of env vars would otherwise look like
+ *  a quiet scan that found nothing. */
+export function isDiscoveryConfigured(): boolean {
+  return getDiscoveryState() !== null;
+}
+
 /** Reset the discovery account's cached state - only needed by tests. */
 export function resetDiscoveryAccount(): void {
   discoveryState = undefined;
