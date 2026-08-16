@@ -256,7 +256,7 @@ export default function FirstVisitGate({
         className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 p-4"
       >
         <div
-          className="max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-2xl bg-white text-center shadow-2xl ring-1 ring-black/5"
+          className="max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-2xl bg-white text-center shadow-2xl ring-1 ring-black/5 max-[479px]:scrollbar-hide"
           style={{ fontFamily: "Arial, Helvetica, sans-serif" }}
         >
           {state === "initial" && (

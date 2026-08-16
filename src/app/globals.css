@@ -7,6 +7,17 @@ body {
   height: 100%;
 }
 
+/* Hide scrollbars while keeping scrolling - used on mobile so the feed
+ * grid / modals don't show an ugly bar eating screen space. */
+@utility scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
 /* Slow upward drift for the Alpha Terminal card wall. The track holds two
  * identical copies of the list, so translating it by exactly -50% loops
  * seamlessly. */

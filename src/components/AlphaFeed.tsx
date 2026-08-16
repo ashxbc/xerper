@@ -239,7 +239,7 @@ export default function AlphaFeed() {
           going down - the column grows vertically as more projects are
           listed. A spacer above keeps the grid slightly down the viewport;
           normal flow, so the sidebar stays untouched. */}
-      <div className="flex h-full w-full flex-col overflow-y-auto">
+      <div className="flex h-full w-full flex-col overflow-y-auto max-[479px]:scrollbar-hide">
         <div className="h-[15%] shrink-0" aria-hidden="true" />
         {/* Mobile: one centered column scaling down; sm+ keeps the
             left-aligned multi-column grid. */}
@@ -305,7 +305,7 @@ export default function AlphaFeed() {
 
             {/* Body: what the campaign is + steps to perform - scrolls when
                 the content is taller than the viewport. */}
-            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-5">
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-5 max-[479px]:scrollbar-hide">
               <div>
                 <h3 className="mb-1 text-[11px] font-bold uppercase tracking-wide text-[#536471]">
                   Task
