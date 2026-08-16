@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import AlphaFeed from "./AlphaFeed";
 import GemsFeed from "./GemsFeed";
 import ProofOfWork from "./ProofOfWork";
 import Sidebar, { type TabId } from "./Sidebar";
@@ -19,7 +20,7 @@ export default function App() {
         ) : tab === "terminal" ? (
           <GemsFeed />
         ) : (
-          <p className="text-sm font-medium text-white/80">Coming Soon.</p>
+          <AlphaFeed />
         )}
       </main>
     </>

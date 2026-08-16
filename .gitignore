@@ -48,3 +48,6 @@ next-env.d.ts
 # local caches
 .cache/
 .x_query_ids.json
+
+# telegram bot in-flight session state (drafts survive restarts)
+.telegram-bot-state.json

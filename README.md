@@ -149,6 +149,38 @@ After each successful run the website updates automatically: `/api/gems`
 reads the `added` projects straight from Supabase (lowest follower count
 first), and the Alpha Terminal renders whatever is stored.
 
+## Listing projects via the Telegram bot
+
+The bot (`scripts/telegram-bot.ts`) is the manual listing path: the site only
+shows projects that were either found by the scan or listed through the bot
+and stored in Supabase. A listing never touches the discovery scan - it has
+its own Groq + X (discovery burner) usage, paced like everything else on that
+account.
+
+Flow: paste a project link / tweet / text -> Groq extracts project name,
+task, campaign details, and steps -> **Edit | List | Cancel** inline buttons
+(edit task / details / steps, max 6 steps, editing stays available until you
+list or cancel) -> List asks for the project's X handle and fetches its PFP
+-> final preview -> **List** inserts the row into its own `projects` table
+(separate from the NFT scan's `nft_projects` - these are curated campaigns,
+not scan results) with status `listed` (so it appears on the site
+immediately) and replies *Listed successfully.*
+
+Run it:
+
+```bash
+npx tsx --env-file=.env.local scripts/telegram-bot.ts
+```
+
+Needs `TELEGRAM_BOT_TOKEN`, `GROQ_API_KEY` (or `TELEGRAM_GROQ_API_KEY`),
+`X_DISCOVERY_AUTH_TOKEN` / `X_DISCOVERY_CT0` (tweet + PFP lookups), and
+`NEXT_PUBLIC_SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` (the insert writes
+directly from the bot process). In-flight drafts persist to
+`.telegram-bot-state.json` (gitignored) so a restart doesn't lose them.
+
+One-time migration: re-run `supabase/schema.sql` - it creates the `projects`
+table (idempotent, safe to re-run) where bot listings are stored.
+
 ## How it works
 
 - **Proof of Work** (`/api/impressions`) - searches X for a user's posts

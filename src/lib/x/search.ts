@@ -109,6 +109,31 @@ export function toInt(value: unknown): number {
   return Number.isNaN(parsed) ? 0 : parsed;
 }
 
+/** Pull every tweet's full_text out of x.com's embedded Relay payload. The
+ *  status page embeds the whole conversation (root + replies) as a stream of
+ *  $R[] assignments, each carrying a full_text:"..." field - joining them in
+ *  page order reconstructs the thread. Returns an empty array when the page
+ *  has no parseable tweets. */
+export function extractThreadTexts(html: string, maxTweets = 25): string[] {
+  const seen = new Set<string>();
+  const texts: string[] = [];
+  for (const match of html.matchAll(/full_text:"((?:[^"\\]|\\.)*)"/g)) {
+    let text = match[1]
+      .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) =>
+        String.fromCharCode(Number.parseInt(hex, 16)),
+      )
+      .replace(/\\n/g, "\n")
+      .replace(/\\"/g, '"')
+      .replace(/\\\\/g, "\\");
+    text = text.trim();
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+    texts.push(text);
+    if (texts.length >= maxTweets) break;
+  }
+  return texts;
+}
+
 /** Find the "load older results" cursor, in either shape X uses. */
 function bottomCursor(payload: unknown): string | null {
   for (const content of walk(payload, "content")) {
@@ -182,6 +207,172 @@ export class XSearch {
       throw new Error(`X returned ${response.status}`);
     }
     return (await response.json()) as Json;
+  }
+
+  /** Fetch the full text of one tweet URL, including the author's own thread
+   *  when the tweet is part of one. Uses this session's GraphQL API: first
+   *  TweetDetail (the same query X's status page uses - it returns the whole
+   *  conversation), then filters to the author's own tweets from the URL's
+   *  handle, oldest first. Falls back to TweetResultByRestId (single tweet)
+   *  when TweetDetail is unavailable.
+   *
+   *  Handles x.com/twitter.com/vxtwitter/fxtwitter URLs. Throws RateLimited on
+   *  a 429, AuthFailed on 401/403, EndpointMoved on a rotated query ID
+   *  (callers can heal + retry via endpoints.discover), and a plain Error for
+   *  any other failure. */
+  async fetchStatusThread(url: string): Promise<string> {
+    const match = url.match(/\/status\/(\d+)/);
+    const handleMatch = url.match(/\.com\/([A-Za-z0-9_]{1,15})\/status\//);
+    if (!match) throw new Error(`Not a tweet URL: ${url}`);
+    const tweetId = match[1];
+    const handle = handleMatch?.[1]?.toLowerCase() ?? "";
+
+    // TweetDetail's variables must include the feature switches and field
+    // toggles X's own client sends, or the query fails validation (422).
+    const detailVariables = {
+      focalTweetId: tweetId,
+      with_rux_injections: false,
+      includePromotedContent: true,
+      withCommunity: true,
+      withQuickPromoteEligibilityTweetFields: true,
+      withBirdwatchPivots: false,
+      withVoice: true,
+      withV2Timeline: false,
+      withBirdwatchNotes: true,
+    };
+
+    const detail = await this.graphqlGet(
+      "TweetDetail",
+      detailVariables,
+    );
+    if (detail) {
+      const tweets = XSearch.conversationTweets(detail);
+      if (tweets.length > 0) {
+        const authorTweets = handle
+          ? tweets
+              .filter((t) => t.screen_name.toLowerCase() === handle)
+              .sort((a, b) => a.createdAt - b.createdAt)
+          : tweets;
+        if (authorTweets.length > 0) {
+          return authorTweets.map((t) => t.text).join("\n\n");
+        }
+      }
+    }
+
+    // Fallback: single-tweet fetch by ID.
+    const single = await this.tweetById(tweetId);
+    return single.text;
+  }
+
+  /** GET a GraphQL query with this session's headers. Returns null on any
+   *  non-200 (including 422 validation failures when X rotates the schema),
+   *  so callers can fall back rather than surface the platform's internals. */
+  private async graphqlGet(
+    operation: string,
+    variables: Json,
+  ): Promise<Json | null> {
+    const id = queryId(operation);
+    if (!id) return null;
+    const params = new URLSearchParams({
+      variables: JSON.stringify(variables),
+      features: JSON.stringify(FEATURES),
+      fieldToggles: JSON.stringify({}),
+    });
+
+    let response: Response;
+    try {
+      response = await fetch(
+        `https://x.com/i/api/graphql/${id}/${operation}?${params}`,
+        { headers: this.headers, signal: AbortSignal.timeout(30_000) },
+      );
+    } catch (error) {
+      throw new Error(
+        `X ${operation} failed: ${error instanceof Error ? error.message : error}`,
+      );
+    }
+    if (response.status === 401 || response.status === 403) {
+      throw new AuthFailed(
+        "X rejected the session - refresh X_DISCOVERY_AUTH_TOKEN and " +
+          "X_DISCOVERY_CT0 from a logged-in browser",
+      );
+    }
+    if (response.status === 429) throw new RateLimited("rate limited by X");
+    if (response.status === 404) {
+      throw new EndpointMoved(`${operation} endpoint moved`);
+    }
+    if (!response.ok) return null;
+    return (await response.json()) as Json;
+  }
+
+  /** Pull every tweet out of a TweetDetail response, deduped by ID, with
+   *  author handle and created-at (epoch ms) for thread reconstruction. */
+  private static conversationTweets(
+    payload: Json,
+  ): Array<{ id: string; screen_name: string; createdAt: number; text: string }> {
+    const tweets: Array<{ id: string; screen_name: string; createdAt: number; text: string }> = [];
+    const seen = new Set<string>();
+    const visit = (node: unknown): void => {
+      if (Array.isArray(node)) {
+        node.forEach(visit);
+      } else if (node && typeof node === "object") {
+        const record = node as Json;
+        const legacy = record.legacy as Json | undefined;
+        if (legacy && record.rest_id) {
+          const id = String(record.rest_id);
+          const text = String(legacy.full_text ?? "").trim();
+          if (text && !seen.has(id)) {
+            seen.add(id);
+            const userResults = (record.core as Json)?.user_results as Json | undefined;
+            const userResult = userResults?.result as Json | undefined;
+            const screenName = String(
+              (userResult?.core as Json | undefined)?.screen_name ??
+                (userResult?.legacy as Json | undefined)?.screen_name ??
+                "",
+            );
+            tweets.push({
+              id,
+              screen_name: screenName,
+              createdAt: new Date(String(legacy.created_at ?? "")).getTime() || 0,
+              text,
+            });
+          }
+        }
+        Object.values(record).forEach(visit);
+      }
+    };
+    visit(payload);
+    return tweets;
+  }
+
+  /** Fetch a single tweet by ID (TweetResultByRestId). */
+  private async tweetById(
+    tweetId: string,
+  ): Promise<{ text: string }> {
+    const payload = await this.graphqlGet("TweetResultByRestId", {
+      tweetId,
+      with_rux_injections: false,
+      includePromotedContent: true,
+      withCommunity: true,
+      withQuickPromoteEligibilityTweetFields: true,
+      withBirdwatchPivots: false,
+      withVoice: true,
+      withV2Timeline: false,
+    });
+    if (!payload) {
+      throw new Error(
+        `Tweet ${tweetId} could not be fetched (the endpoint may have changed)`,
+      );
+    }
+    const result = (payload.data as Json)?.tweetResult as Json | undefined;
+    const tweet = result?.result as Json | undefined;
+    if (!tweet) {
+      // 200 with no tweetResult: the tweet ID doesn't exist (or is private/
+      // deleted) - the API answers 200 with a null result rather than 404.
+      throw new Error(`Tweet ${tweetId} not found - it may be deleted or private`);
+    }
+    const text = String((tweet.legacy as Json)?.full_text ?? "").trim();
+    if (!text) throw new Error(`Tweet ${tweetId} has no text`);
+    return { text };
   }
 
   /** Page through results, returning the posts and whether X cut us off. */

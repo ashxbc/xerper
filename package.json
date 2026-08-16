@@ -13,7 +13,8 @@
     "@vercel/analytics": "^2.0.1",
     "next": "16.3.0",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "telegraf": "^4.16.3"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
@@ -22,6 +23,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.3.0",
+    "puppeteer-core": "^25.7.0",
     "tailwindcss": "^4",
     "tsx": "^4.23.12",
     "typescript": "^5"

@@ -72,3 +72,68 @@ create index if not exists gems_scan_logs_started_at_idx
 alter table public.gems_scan_logs drop constraint if exists gems_scan_logs_status_check;
 alter table public.gems_scan_logs add constraint gems_scan_logs_status_check
   check (status in ('running', 'success', 'partial', 'failed'));
+
+-- Projects listed through the Telegram bot. These are NOT NFT-scan results -
+-- they are manually submitted campaigns (project name, task, campaign
+-- details, up to 6 steps) that a user curates and confirms in Telegram
+-- before they are stored. They live in their own table, separate from the
+-- discovery scan's nft_projects. The dedup key is the lowercased X handle.
+create table if not exists public.projects (
+  id bigint generated always as identity primary key,
+  -- The project's X handle - lowercased so the unique index dedupes
+  -- regardless of how X happens to capitalise the account.
+  handle text not null,
+  name text not null default '',
+  -- X profile snapshot, fetched when the listing is confirmed.
+  avatar text not null default '',
+  banner text not null default '',
+  bio text not null default '',
+  followers bigint not null default 0,
+  following bigint not null default 0,
+  verified boolean not null default false,
+  joined text not null default '',
+  -- Campaign data produced by the bot (task / details / steps / prize).
+  task text not null default '',
+  details text not null default '',
+  steps jsonb not null default '[]'::jsonb,
+  prize_pool text not null default '',
+  -- Optional link to the campaign's own page (provided in the bot after the
+  -- X handle; empty when skipped).
+  campaign_url text not null default '',
+  -- Where the row came from (reserved for future channels; 'telegram' now).
+  source text not null default 'telegram',
+  -- 'listed' = published to the site, 'removed' = hidden (reserved).
+  status text not null default 'listed'
+    check (status in ('listed', 'removed')),
+  listed_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create unique index if not exists projects_handle_key
+  on public.projects (lower(handle));
+
+create index if not exists projects_status_idx
+  on public.projects (status);
+
+create index if not exists projects_listed_at_idx
+  on public.projects (listed_at desc);
+
+-- One row per first-time visitor's onboarding/follow flow (the modal that
+-- asks them to follow Valor). Keyed by a client-generated session id; each
+-- step of the flow stamps its own timestamp so the funnel is fully visible.
+-- Idempotent - safe to re-run.
+create table if not exists public.onboarding (
+  id bigint generated always as identity primary key,
+  session_id text not null,
+  first_visit_at timestamptz not null default now(),
+  modal_shown_at timestamptz,
+  follow_clicked_at timestamptz,
+  detection_completed_at timestamptz,
+  continue_clicked_at timestamptz,
+  completed_at timestamptz,
+  metadata jsonb not null default '{}'::jsonb,
+  updated_at timestamptz not null default now()
+);
+
+create unique index if not exists onboarding_session_key
+  on public.onboarding (session_id);

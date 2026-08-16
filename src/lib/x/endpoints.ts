@@ -8,6 +8,12 @@ import * as cache from "./cache";
 export const FALLBACKS: Record<string, string> = {
   SearchTimeline: "hyPfJYJ_XAtDYoslQc-Rgg",
   UserByScreenName: "Gb-d6r0vxPOADdG62OEBpQ",
+  // Single-tweet fetch by ID (used by the Telegram bot to read a pasted
+  // tweet URL through the discovery burner).
+  TweetResultByRestId: "GZsN2Pc4knAoit6pXa4HSA",
+  // Full conversation fetch - the query X's own status page uses; the bot
+  // reads the author's thread out of it.
+  TweetDetail: "XMOz5h24KAZ86qKffKTLdQ",
 };
 
 export const USER_AGENT =
