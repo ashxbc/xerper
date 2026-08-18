@@ -143,3 +143,91 @@ create table if not exists public.onboarding (
 
 create unique index if not exists onboarding_session_key
   on public.onboarding (session_id);
+
+-- --------------------------------------------------------------------
+-- X Analytics (impression bar chart)
+-- --------------------------------------------------------------------
+-- Per-post impression snapshots: one row per (handle, tweet_id) carrying
+-- the exact date the tweet was posted and its impression count as of the
+-- last fetch. This is the source of truth - daily/weekly/monthly totals
+-- are always re-aggregated from here, so a returning user's older days
+-- stay exact while only the recent days get refreshed from X.
+--
+-- Handles are always stored lowercased (X handles are case-insensitive).
+create table if not exists public.x_analytics_posts (
+  id bigint generated always as identity primary key,
+  handle text not null,
+  tweet_id text not null,
+  tweet_date date not null,
+  -- 'post' = original tweet or retweet, 'reply' = reply tweet
+  post_type text not null default 'post'
+    check (post_type in ('post', 'reply')),
+  impressions bigint not null default 0,
+  likes bigint not null default 0,
+  replies bigint not null default 0,
+  reposts bigint not null default 0,
+  fetched_at timestamptz not null default now()
+);
+
+-- Older deployments created the posts table before the interaction columns
+-- existed; add them idempotently so the stats modal has its source data.
+alter table public.x_analytics_posts add column if not exists likes bigint not null default 0;
+alter table public.x_analytics_posts add column if not exists replies bigint not null default 0;
+alter table public.x_analytics_posts add column if not exists reposts bigint not null default 0;
+-- Track whether a row is an original post or a reply tweet.
+alter table public.x_analytics_posts add column if not exists post_type text not null default 'post';
+
+drop index if exists public.x_analytics_posts_handle_tweet_key;
+create unique index if not exists x_analytics_posts_handle_tweet_key
+  on public.x_analytics_posts (handle, tweet_id);
+
+create index if not exists x_analytics_posts_handle_date_idx
+  on public.x_analytics_posts (handle, tweet_date);
+
+-- Materialized per-day totals derived from x_analytics_posts (one row per
+-- handle + day). Kept separate from the raw posts so chart reads stay a
+-- single indexed lookup instead of aggregating thousands of rows per
+-- request. Rebuilt from posts on every fetch.
+create table if not exists public.x_analytics_daily (
+  id bigint generated always as identity primary key,
+  handle text not null,
+  tweet_date date not null,
+  tweet_count integer not null default 0,
+  reply_count integer not null default 0,
+  total_impressions bigint not null default 0,
+  fetched_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- Plain-column unique indexes (handle is always lowercased on write) so
+-- PostgREST can use them as upsert conflict targets - expression indexes
+-- on lower(handle) cannot.
+-- NOTE: index names are never schema-qualified in CREATE INDEX - an index
+-- always lives in the schema of the table it's created `on`, so only the
+-- table reference gets the `public.` prefix, not the index name itself.
+drop index if exists public.x_analytics_daily_handle_date_key;
+create unique index if not exists x_analytics_daily_handle_date_key
+  on public.x_analytics_daily (handle, tweet_date);
+
+create index if not exists x_analytics_daily_handle_idx
+  on public.x_analytics_daily (handle);
+
+-- reply_count is new - add idempotently for existing deployments.
+alter table public.x_analytics_daily add column if not exists reply_count integer not null default 0;
+
+-- One row per handle tracking when we last fetched their tweet data, so
+-- subsequent requests can skip old pages and only refresh recent days.
+create table if not exists public.x_analytics_profiles (
+  id bigint generated always as identity primary key,
+  handle text not null,
+  name text not null default '',
+  avatar text not null default '',
+  followers bigint not null default 0,
+  verified boolean not null default false,
+  last_fetched_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+drop index if exists public.x_analytics_profiles_handle_key;
+create unique index if not exists x_analytics_profiles_handle_key
+  on public.x_analytics_profiles (handle);

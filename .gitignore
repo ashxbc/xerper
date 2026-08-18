@@ -51,3 +51,6 @@ next-env.d.ts
 
 # telegram bot in-flight session state (drafts survive restarts)
 .telegram-bot-state.json
+
+# local agent config (may contain API keys)
+config.json

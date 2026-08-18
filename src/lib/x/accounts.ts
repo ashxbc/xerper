@@ -175,3 +175,109 @@ export function reportDiscoveryRateLimited(): void {
   discoveryCooldownUntil = Date.now() + COOLDOWN_ON_429_MS;
   if (state) state.nextAvailableAt = discoveryCooldownUntil;
 }
+
+// ---- dedicated analytics accounts -----------------------------------------
+// Two burners used exclusively by the X Analytics tool (impressions /
+// posts / replies bar-chart). They never compete with the 3-account
+// pool above or the discovery burner below. Requests rotate between
+// the two accounts with 1-second pacing each, giving ~2 req/sec
+// aggregate throughput while staying well under X's per-session limits.
+// If both accounts are busy the caller waits (async queue) instead of
+// failing fast — the user is already watching a loading spinner.
+
+const ANALYTICS_MIN_INTERVAL_MS = 1000;
+let analyticsCooldownUntil = 0;
+
+let analyticsPool: AccountState[] | null = null;
+let analyticsCursor = 0;
+
+function loadAnalyticsAccounts(): Account[] {
+  const accounts: Account[] = [];
+  for (let i = 1; i <= 2; i++) {
+    const authToken = (
+      process.env[`X_ANALYTICS_AUTH_TOKEN_${i}`] ?? ""
+    ).trim();
+    const ct0 = (process.env[`X_ANALYTICS_CT0_${i}`] ?? "").trim();
+    if (authToken && ct0)
+      accounts.push({ id: `analytics-${i}`, authToken, ct0 });
+  }
+  // Back-compat: a lone unindexed pair still works as a single burner
+  if (accounts.length === 0) {
+    const authToken = (
+      process.env.X_ANALYTICS_AUTH_TOKEN ?? ""
+    ).trim();
+    const ct0 = (process.env.X_ANALYTICS_CT0 ?? "").trim();
+    if (authToken && ct0)
+      accounts.push({ id: "analytics-1", authToken, ct0 });
+  }
+  return accounts;
+}
+
+function getAnalyticsPool(): AccountState[] {
+  if (!analyticsPool)
+    analyticsPool = loadAnalyticsAccounts().map((account) => ({
+      account,
+      nextAvailableAt: 0,
+    }));
+  return analyticsPool;
+}
+
+/** Wait for, then reserve, one of the two analytics burners.
+ *
+ *  Unlike the user-facing `reserveAccount()` which fails fast when all
+ *  accounts are busy, analytics callers tolerate a short wait because the
+ *  user is already behind a loading spinner. The function round-robins
+ *  between accounts and sleeps until the next one becomes available.
+ *
+ *  When a real X 429 hits, the pool is drained via `reportAnalyticsRate-
+ *  Limited()` so both accounts cool down. */
+export async function acquireAnalyticsAccount(): Promise<Account> {
+  const states = getAnalyticsPool();
+  if (states.length === 0) {
+    throw new Error(
+      "No analytics session configured - set X_ANALYTICS_AUTH_TOKEN_1 / " +
+        "X_ANALYTICS_CT0_1 (and _2 for the second account) environment variables",
+    );
+  }
+
+  if (analyticsCooldownUntil > Date.now()) {
+    throw new RateLimited(
+      "Analytics accounts are cooling down after an X 429. Please try again later.",
+    );
+  }
+
+  // Find the next available account; if none are free yet, wait for the
+  // soonest one rather than failing outright.
+  let bestIdx = -1;
+  let bestWait = Infinity;
+  for (let i = 0; i < states.length; i++) {
+    const idx = (analyticsCursor + i) % states.length;
+    const wait = states[idx].nextAvailableAt - Date.now();
+    if (wait <= 0) {
+      bestIdx = idx;
+      bestWait = 0;
+      break;
+    }
+    if (wait < bestWait) {
+      bestIdx = idx;
+      bestWait = wait;
+    }
+  }
+
+  if (bestWait > 0) {
+    await new Promise((resolve) => setTimeout(resolve, bestWait));
+  }
+
+  states[bestIdx].nextAvailableAt = Date.now() + ANALYTICS_MIN_INTERVAL_MS;
+  analyticsCursor = (bestIdx + 1) % states.length;
+  return states[bestIdx].account;
+}
+
+/** Called after X itself 429s any analytics burner — both accounts go into
+ *  cooldown since they share a rate-limit pool per IP/session class. */
+export function reportAnalyticsRateLimited(): void {
+  analyticsCooldownUntil = Date.now() + COOLDOWN_ON_429_MS;
+  for (const state of getAnalyticsPool()) {
+    state.nextAvailableAt = analyticsCooldownUntil;
+  }
+}

@@ -669,7 +669,12 @@ export class XSearch {
         (user.relationship_counts as Json)?.following ??
           (user.legacy as Json)?.friends_count,
       ),
-      verified: Boolean((user.verification as Json)?.verified),
+      // X moved the blue-tick flag to is_blue_verified - verification.verified
+      // is now false even for premium accounts. Check both so the premium
+      // gate (analytics) and verified badges keep working.
+      verified:
+        Boolean(user.is_blue_verified) ||
+        Boolean((user.verification as Json)?.verified),
       joined: String(core.created_at ?? (user.legacy as Json)?.created_at ?? ""),
     };
   }
